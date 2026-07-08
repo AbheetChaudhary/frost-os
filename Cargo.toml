@@ -1,0 +1,12 @@
+[package]
+name = "frost"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+
+[profile.dev]
+panic = "abort"
+
+[lib]
+crate-type = ["staticlib"]
