@@ -1,3 +1,5 @@
+#![allow(unused)]
+
 use core::sync::atomic::{AtomicBool, Ordering};
 use core::ptr::NonNull;
 use core::fmt;
@@ -118,10 +120,11 @@ const WIDTH:       usize = 80;
 const HEIGHT:      usize = 25;
 const BUFFER_SIZE: usize = WIDTH * HEIGHT;
 
-pub struct CurrentColor(u8);
+#[derive(Copy, Clone)]
+pub struct Attribute(u8);
 
-impl CurrentColor {
-    /// Generate a CurrentColor from background and foreground Color and blink.
+impl Attribute {
+    /// Generate a Attribute from background and foreground Color and blink.
     /// Only the lower 3 bits of the background are used, the upper most bit is
     /// taken from blink.
     pub const fn from(bg: Color, fg: Color, blink: bool) -> Self {
@@ -129,16 +132,35 @@ impl CurrentColor {
         let fg: u8 = fg as u8;
         let blink: u8 = blink as u8;
 
-        let current_color = (blink << 7) | (bg << 4) | fg;
+        let attr = (blink << 7) | (bg << 4) | fg;
 
-        CurrentColor(current_color)
+        Attribute(attr)
+    }
+
+    pub fn with_blink(&self, blink: bool) -> Self {
+        let b = (blink as u8) << 7;
+        let a = self.0 & 0x7f;
+
+        Attribute(a | b)
+    }
+}
+
+#[derive(Default)]
+struct Position {
+    x: usize, 
+    y: usize,
+}
+
+impl Position {
+    fn as_idx(&self) -> usize {
+        self.y * WIDTH + self.x
     }
 }
 
 pub struct VgaBuffer {
-    ptr:   NonNull<u16>,
-    color: CurrentColor,
-    pos:   usize, // position for the next character to go
+    ptr:  NonNull<u16>,
+    attr: Attribute,
+    pos:  Position,           // position for the next character to go
 }
 
 /// It needs `Send` to satisfy the bounds for `SpinLock`, but it will never be
@@ -164,9 +186,9 @@ impl VgaBuffer {
     /// instance of it. Just use the global one.
     pub const unsafe fn new() -> Self {
         VgaBuffer {
-            ptr:   NonNull::new(0xb8000 as *mut u16).unwrap(),
-            color: CurrentColor::from(Color::Black, Color::LightGreen, false),
-            pos:   0,
+            ptr:  NonNull::new(0xb8000 as *mut u16).unwrap(),
+            attr: Attribute::from(Color::Black, Color::LightGreen, false),
+            pos:  Position { x: 0, y: 0 },
         }
     }
 
@@ -176,69 +198,123 @@ impl VgaBuffer {
     /// VGA follows 'code page 437' encoding. Every byte corresponds to a
     /// printable character, even control characters as well. They just print
     /// arbitrary emoji and hearts.
-    pub fn write_byte(&mut self, byte: u8) {
-        let character: u16 = u16::from_le_bytes([byte, self.color.0]);
-
+    pub fn write_byte_and_advance_cursor(&mut self, byte: u8) {
         match byte {
             b'\n' => {
-                self.new_line();
+                self.enter_new_line();
+            }
+
+            // backspace
+            b'\x08' => {
+                // Move the cursor one step back, and write space to the new
+                // location. Do nothing if cursor is already at the beginning.
+
+                // TODO: what should be the correct attribute to write the
+                // replacing space with?
+                //
+                // Currently we are using the same attribute with which the last
+                // character was written. Looks reasonable for now.
+                //
+                // TODO: Backspace at the beginning of a line unconditionally
+                // puts us to the end of the previous line(if not already at the
+                // first line), regardless of whether there was any character
+                // written or not. So backspaces after writing a newline are not
+                // functioning correctly.
+                if self.pos.x > 0 {
+                    self.pos.x -= 1;
+                    unsafe { self.putchar(b' ', self.attr.with_blink(false)) };
+                } else if self.pos.y > 0 {
+                    self.pos.y -= 1;
+                    self.pos.x = WIDTH - 1;
+                    unsafe { self.putchar(b' ', self.attr.with_blink(false)) };
+                }
             }
 
             _ => {
-                unsafe {
-                    self.ptr.add(self.pos).write_volatile(character);
-                }
-                self.pos += 1;
+                unsafe { self.putchar(byte, self.attr); }
+
+                self.advance_cursor();
             }
         }
+    }
+
+    /// Utility function to just write byte at the current cursor location,
+    /// using the given attribute without advancing the cursor.
+    ///
+    /// SAFETY: The current cursor position must not be out of bounds of the VGA
+    /// text buffer.
+    unsafe fn putchar(&mut self, byte: u8, attr: Attribute) {
+        let character = u16::from_le_bytes([byte, attr.0]);
+
+        let idx = self.pos.as_idx();
+
+        unsafe {
+            self.ptr.add(idx).write_volatile(character);
+        }
+    }
+
+    fn advance_cursor(&mut self) {
+        // If we are at the last cell of current line then enter newline,
+        // otherwise just move the cursor one step right.
+        if self.pos.x == WIDTH - 1 {
+            self.enter_new_line();
+        } else {
+            self.pos.x += 1;
+        }
+    }
+
+    /// SAFETY: The new position must valid cell position inside the 80x25 VGA
+    /// buffer.
+    unsafe fn set_position(&mut self, pos: (usize, usize)) {
+        self.pos.x = pos.0;
+        self.pos.y = pos.1;
     }
 
     pub fn write_string(&mut self, text: &str) {
         for byte in text.bytes() {
             match byte {
                 // Printable ASCII characters.
-                0x20..=0x7e | b'\n' => self.write_byte(byte),
+                0x20..=0x7e | b'\n' | b'\x08' => self.write_byte_and_advance_cursor(byte),
 
                 // For every non printable character print square.
-                _ => self.write_byte(0xfe),
+                _ => self.write_byte_and_advance_cursor(0xfe),
             }
         }
     }
 
+    /// Clear the screen by writing space to all the cells and bring the cursor
+    /// to the beginning.
     pub fn clear_screen(&mut self) {
-        for i in 0..25 {
-            self.scroll_up();
+        for i in 0..BUFFER_SIZE {
+            unsafe { self.ptr.add(i).write_volatile(0); }
         }
+
+        self.pos = Position::default();
     }
 
-    pub fn change_color(&mut self, to: CurrentColor) {
-        self.color = to;
-    }
-
-    pub fn new_line(&mut self) {
-        let row = self.pos / WIDTH;
-        // let col = self.pos % WIDTH;
-
-        if row < HEIGHT - 1 {
+    /// Sets the cursor position to the beginning of the next line. If already
+    /// at the last line then scrolls the view up, and sets the cursor at the
+    /// beginning of the new emptied last line.
+    pub fn enter_new_line(&mut self) {
+        if self.pos.y < HEIGHT - 1 {
             // Cursor is not at the last line, it could go one line lower.
             //
             // Set it to beginning of next line.
-            self.pos = (row + 1) * WIDTH;
+            self.pos = Position { x: 0, y: self.pos.y + 1 };
         } else {
+            // Cursor is at the last line.
             self.scroll_up();
 
-            // Bring the cursor to the beginning of the line.
-            self.pos = row * WIDTH;
+            // Bring the cursor to the beginning of the last line.
+            self.pos = Position { x: 0, y: HEIGHT - 1 };
         }
     }
 
     /// This moves everything one line up, creating a new blank line at the
-    /// bottom. The cursor position remains same with respect to the text except
-    /// in the case when the cursor was on the first line, in that case the
-    /// `self.pos` value does not changes.
+    /// bottom.
     fn scroll_up(&mut self) {
         // Move everything from second line till last line one line up.
-        // Since there is no volatile copy, we must copy each character
+        // Since there is no volatile copy(), we must copy each character
         // individually to its new location, that is on the line above.
         for idx in WIDTH..BUFFER_SIZE {
             unsafe {
@@ -248,21 +324,13 @@ impl VgaBuffer {
         }
 
         // Clear the last line, with volatile writes.
+        let begin = unsafe { self.ptr.add(WIDTH * HEIGHT - WIDTH) };
         for i in 0..WIDTH {
+            // Write space in black with no blink in each cell.
             unsafe {
-                self.ptr.add(WIDTH * (HEIGHT - 1) + i).write_volatile(0);
+                begin.add(i).write_volatile(0);
             }
         }
-
-        // Set new cursor position to just above current position.
-        let row = self.pos / WIDTH;
-        self.pos = if row > 0 {
-            // Just above the current position.
-            self.pos - WIDTH
-        } else {
-            // Already at first line, no change.
-            self.pos
-        };
     }
 }
 

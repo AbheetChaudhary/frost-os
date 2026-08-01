@@ -1,7 +1,10 @@
 use core::arch::asm;
+use core::mem::MaybeUninit;
 
 use crate::{println, print};
 
+// These are function pointers to ISR's from 0-31. All of them are reserved for
+// CPU exceptions.
 unsafe extern "C" {
     fn _isr0();  fn _isr1();  fn _isr2();  fn _isr3();  
     fn _isr4();  fn _isr5();  fn _isr6();  fn _isr7();  
@@ -13,6 +16,14 @@ unsafe extern "C" {
     fn _isr28(); fn _isr29(); fn _isr30(); fn _isr31();
 }
 
+/// Funciton pointers to ISR's reserved for CPU exceptions.
+const EXCEPTION_ISR_FN_PTRS: [unsafe extern "C" fn(); 32] = [
+    _isr0,  _isr1,  _isr2,  _isr3,  _isr4,  _isr5,  _isr6,  _isr7,  
+    _isr8,  _isr9,  _isr10, _isr11, _isr12, _isr13, _isr14, _isr15, 
+    _isr16, _isr17, _isr18, _isr19, _isr20, _isr21, _isr22, _isr23,
+    _isr24, _isr25, _isr26, _isr27, _isr28, _isr29, _isr30, _isr31,
+];
+
 #[repr(C, packed)]
 struct IDTR {
     size: u16,
@@ -20,11 +31,14 @@ struct IDTR {
 }
 
 unsafe extern "C" {
+    /// External symbol defined in assembly file.
     static mut _idtr: IDTR;
 }
 
 static mut GLOBAL_IDT: [IDTEntry; 256] = [IDTEntry::const_default(); 256];
 
+/// The `isr_common_stub` pushes the registers on stack in a fixed order that
+/// can be referenced as this struct.
 #[derive(Debug)]
 #[repr(C)]
 pub struct RegState {
@@ -40,15 +54,38 @@ pub struct RegState {
     edx:      u32,
     ecx:      u32,
     eax:      u32,
+
+    /// Interrupt number as pushed by the ISR before jumping to the
+    /// `isr_common_stub`
     pub int_no:   u32,
-    pub err_code: u32,
+
+    /// Error code that is part of the interrupt. Not all interrupts have an
+    /// error code, so the ISR pushes a dummy error code just to keep a fixed
+    /// structure for the stack.
+    pub err_code: MaybeUninit<u32>,
+
     ip:       u32,
     cs:       u32,
-    flats:    u32,
-    sp:       u32,
-    ss:       u32,
+    flags:    u32,
+
+    // These two may not always be there. They are present only if interrupt
+    // occured when program was in another privilege level when the interrupt
+    // occured.
+    user_sp:  MaybeUninit<u32>,
+    ss:       MaybeUninit<u32>,
 }
 
+/// Interrupt handlers will get a pointer to the RegState as pushed by the
+/// `isr_common_stub` in the assembly code.
+///
+/// The interrupt/exception handler functions should not except a reference to
+/// RegState, but a raw pointer. The pointer to RegState as created on the stack
+/// may not be properly aligned so `read_unaligned()` must be used to read its
+/// fields.
+pub type InterruptStackFrame = *const RegState;
+
+/// Error message for 32 reserved exceptions. Some are meaningful, others are
+/// just "Reserved Exception".
 const EXCEPTION_MESSAGES: [&str; 32] = [
     "Division By Zero Exception",
     "Debug Exception",
@@ -57,9 +94,9 @@ const EXCEPTION_MESSAGES: [&str; 32] = [
     "Into Detected Overflow Exception",
     "Out of Bounds Exception",
     "Invalid Opcode Exception",
-    "No Coprocessor Exception",
+    "No Co-processor Exception",
     "Double Fault Exception",
-    "Coprocessor Segment Overrun Exception",
+    "Co-processor Segment Overrun Exception",
     "Bad TSS Exception",
     "Segment Not Present Exception",
     "Stack Fault Exception",
@@ -106,25 +143,26 @@ impl IDTEntry {
     }
 }
 
+/// For now, all the exceptions have an ISR that eventually reaches here.
 #[unsafe(no_mangle)]
-pub extern "C" fn fault_handler(regs: &RegState) {
-    if regs.int_no < 32 {
-        print!("{}", EXCEPTION_MESSAGES[regs.int_no as usize]);
+#[inline(never)]
+pub extern "C" fn exception_handler(regs: InterruptStackFrame) {
+    let int_no = unsafe { (&raw const (*regs).int_no).read_unaligned() };
+
+    if int_no < 32 {
+        print!("{}", EXCEPTION_MESSAGES[int_no as usize]);
         println!(". System Halted!");
 
         loop {}
     }
+
+    unreachable!("Reached exception_handler() but not exception occured.");
 }
 
 pub struct IDT;
 
 impl IDT {
-    pub fn set_gate(
-        idx: usize,
-        isr: unsafe extern "C" fn(),
-        seg_sel: u16,
-        type_attrs: u8
-    ) {
+    pub fn set_gate(idx: usize, isr: unsafe extern "C" fn(), seg_sel: u16, type_attrs: u8) {
         let func_addr = isr as u32;
 
         let idt_entry = IDTEntry {
@@ -138,11 +176,13 @@ impl IDT {
         unsafe { GLOBAL_IDT[idx] = idt_entry; }
     }
 
-    pub fn flush() {
+    fn flush() {
         unsafe {
             _idtr.size = 256 * size_of::<IDTEntry>() as u16 - 1;
             _idtr.base = &raw const GLOBAL_IDT as u32;
+        }
 
+        unsafe {
             asm!(
                 "lidt [{}]",
 
@@ -152,37 +192,16 @@ impl IDT {
     }
 }
 
-pub fn isr_install() {
-    IDT::set_gate(0,  _isr0,  0x08, 0x8E);
-    IDT::set_gate(1,  _isr1,  0x08, 0x8E);
-    IDT::set_gate(2,  _isr2,  0x08, 0x8E);
-    IDT::set_gate(3,  _isr3,  0x08, 0x8E);
-    IDT::set_gate(4,  _isr4,  0x08, 0x8E);
-    IDT::set_gate(5,  _isr5,  0x08, 0x8E);
-    IDT::set_gate(6,  _isr6,  0x08, 0x8E);
-    IDT::set_gate(7,  _isr7,  0x08, 0x8E);
-    IDT::set_gate(8,  _isr8,  0x08, 0x8E);
-    IDT::set_gate(9,  _isr9,  0x08, 0x8E);
-    IDT::set_gate(10, _isr10, 0x08, 0x8E);
-    IDT::set_gate(11, _isr11, 0x08, 0x8E);
-    IDT::set_gate(12, _isr12, 0x08, 0x8E);
-    IDT::set_gate(13, _isr13, 0x08, 0x8E);
-    IDT::set_gate(14, _isr14, 0x08, 0x8E);
-    IDT::set_gate(15, _isr15, 0x08, 0x8E);
-    IDT::set_gate(16, _isr16, 0x08, 0x8E);
-    IDT::set_gate(17, _isr17, 0x08, 0x8E);
-    IDT::set_gate(18, _isr18, 0x08, 0x8E);
-    IDT::set_gate(19, _isr19, 0x08, 0x8E);
-    IDT::set_gate(20, _isr20, 0x08, 0x8E);
-    IDT::set_gate(21, _isr21, 0x08, 0x8E);
-    IDT::set_gate(22, _isr22, 0x08, 0x8E);
-    IDT::set_gate(23, _isr23, 0x08, 0x8E);
-    IDT::set_gate(24, _isr24, 0x08, 0x8E);
-    IDT::set_gate(25, _isr25, 0x08, 0x8E);
-    IDT::set_gate(26, _isr26, 0x08, 0x8E);
-    IDT::set_gate(27, _isr27, 0x08, 0x8E);
-    IDT::set_gate(28, _isr28, 0x08, 0x8E);
-    IDT::set_gate(29, _isr29, 0x08, 0x8E);
-    IDT::set_gate(30, _isr30, 0x08, 0x8E);
-    IDT::set_gate(31, _isr31, 0x08, 0x8E);
+pub unsafe fn isr_install() {
+    // Index of the code segment in the GDT.
+    let code_segment_idx = 0x08;
+
+    // Interrupt gate type attribute.
+    let type_attrs = 0x8e;
+
+    for i in 0..32 {
+        IDT::set_gate(i, EXCEPTION_ISR_FN_PTRS[i], code_segment_idx, type_attrs);
+    }
+
+    IDT::flush();
 }

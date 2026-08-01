@@ -9,49 +9,53 @@ unsafe extern "C" {
     fn _irq12(); fn _irq13(); fn _irq14(); fn _irq15();
 }
 
-#[inline(never)]
-fn no_irq(_: &isr::RegState) {
-    panic!("No IRQ set!");
-}
+type IrqHandlerFn = unsafe extern "C" fn(isr::InterruptStackFrame);
 
-pub static mut GLOBAL_IRQ_ROUTINES: [usize; 16] = [0; 16];
+/// All the IRQ handler function pointers are stored here. The `irq_handler`
+/// function looks for the IRQ number and calls the corresponding function if
+/// the function pointer is not null.
+///
+/// Although it is possible that the 0 address is a valid function pointer for
+/// an handler if someone sets up things that way. But it is very unlikely
+/// otherwise.
+static mut GLOBAL_IRQ_HANDLER_ROUTINES: [usize; 16] = [0; 16];
 
 pub struct IRQRoutines;
 
 impl IRQRoutines {
-    pub fn install_handler(irq_idx: usize, handler: fn(&isr::RegState)) {
+    pub unsafe fn install_handler(irq_idx: u8, handler: IrqHandlerFn) {
         if irq_idx > 15 {
             panic!("irq_idx: {} is greater than 15", irq_idx);
         }
 
         unsafe {
-            let ptr = (&raw mut GLOBAL_IRQ_ROUTINES).cast::<usize>();
+            let ptr = (&raw mut GLOBAL_IRQ_HANDLER_ROUTINES).cast::<usize>();
             let handler = core::mem::transmute(handler);
-            ptr.add(irq_idx).write_volatile(handler);
+            ptr.add(irq_idx as usize).write_volatile(handler);
         }
-        println!("installed something");
+        println!("installed handler for IRQ{}", irq_idx);
     }
 
-    pub fn uninstall_handler(irq_idx: usize) {
+    pub unsafe fn uninstall_handler(irq_idx: u8) {
         if irq_idx > 15 {
             panic!("irq_idx: {} is greater than 15", irq_idx);
         }
 
         unsafe {
-            let ptr = (&raw mut GLOBAL_IRQ_ROUTINES).cast::<usize>();
-            ptr.add(irq_idx).write_volatile(0);
+            let ptr = (&raw mut GLOBAL_IRQ_HANDLER_ROUTINES).cast::<usize>();
+            ptr.add(irq_idx as usize).write_volatile(0);
         }
     }
 
-    fn get_handler(irq_idx: usize) -> Option<fn(&isr::RegState)> {
+    fn get_handler(irq_idx: u8) -> Option<IrqHandlerFn> {
         if irq_idx > 15 {
             panic!("irq_idx: {} is greater than 15", irq_idx);
         }
 
         unsafe {
-            let ptr = (&raw const GLOBAL_IRQ_ROUTINES).cast::<usize>();
+            let ptr = (&raw const GLOBAL_IRQ_HANDLER_ROUTINES).cast::<usize>();
 
-            let handler = ptr.add(irq_idx).read_volatile();
+            let handler = ptr.add(irq_idx as usize).read_volatile();
 
             if handler != 0 {
                 Some(core::mem::transmute(handler))
@@ -62,30 +66,44 @@ impl IRQRoutines {
     }
 }
 
-const PIC1:         u16 = 0x20; /* IO base address for master PIC */
-const PIC2:         u16 = 0xA0; /* IO base address for slave PIC */
+// IO base address for master PIC
+const PIC1:         u16 = 0x20;
+
+// IO base address for slave PIC
+const PIC2:         u16 = 0xA0;
+
+/// Command and data port address for master PIC.
 const PIC1_COMMAND: u16 = PIC1;
-const PIC1_DATA:    u16 = (PIC1+1);
+const PIC1_DATA:    u16 = PIC1+1;
+
+/// Command and data port address for slave PIC.
 const PIC2_COMMAND: u16 = PIC2;
-const PIC2_DATA:    u16 = (PIC2+1);
+const PIC2_DATA:    u16 = PIC2+1;
+
+/// End Of Interrupt
 const PIC_EIO:       u8 = 0x20;
 
-const ICW1_ICW4:      u8 = 0x01;
-const ICW1_SINGLE:    u8 = 0x02;
-const ICW1_INTERVAL4: u8 = 0x04;
-const ICW1_LEVEL:     u8 = 0x08;
-const ICW1_INIT:      u8 = 0x10;
+const ICW1_ICW4:       u8 = 0x01;
+const _ICW1_SINGLE:    u8 = 0x02;
+const _ICW1_INTERVAL4: u8 = 0x04;
+const _ICW1_LEVEL:     u8 = 0x08;
+const ICW1_INIT:       u8 = 0x10;
 
-const ICW4_8086:       u8 = 0x01;
-const ICW4_AUTO:       u8 = 0x02;
-const ICW4_BUF_SLAVE:  u8 = 0x08;
-const ICW4_BUF_MASTER: u8 = 0x0C;
-const ICW4_SFNM:       u8 = 0x10;
+const ICW4_8086:        u8 = 0x01;
+const _ICW4_AUTO:       u8 = 0x02;
+const _ICW4_BUF_SLAVE:  u8 = 0x08;
+const _ICW4_BUF_MASTER: u8 = 0x0C;
+const _ICW4_SFNM:       u8 = 0x10;
 
+/// Slave PIC is wired to IRQ2 of master.
 const CASCADE_IRQ: u8 = 2;
 
+/// Unused port that could be written to in order to add a predictable amount of
+/// delay in PIC I/O operations. This is the one that linux uses.
+pub const DEFAULT_WAIT_UNUSED_PORT: u16 = 0x80;
+
 #[inline(always)]
-pub fn outb(port: u16, val: u8) {
+pub unsafe fn outportb(port: u16, val: u8) {
     unsafe {
         asm!(
             "out dx, al",
@@ -97,51 +115,93 @@ pub fn outb(port: u16, val: u8) {
 }
 
 #[inline(always)]
-pub fn io_wait() { // Needed on older machines to give PIC some time to react.
-    outb(0x80, 0);
-}
+pub unsafe fn inportb(port: u16) -> u8 {
+    let val: u8;
 
-fn pic_remap() {
-    const OFFSET_1: u8 = 32; // vector offset for master PIC
-    const OFFSET_2: u8 = 40; // vector offset for slave PIC
+    unsafe {
+        asm!(
+            "in al, dx",
 
-    outb(PIC1_COMMAND, ICW1_INIT | ICW1_ICW4);
-    io_wait();
-
-    outb(PIC2_COMMAND, ICW1_INIT | ICW1_ICW4);
-    io_wait();
-
-    outb(PIC1_DATA, OFFSET_1);
-    io_wait();
-
-    outb(PIC2_DATA, OFFSET_2);
-    io_wait();
-
-    outb(PIC1_DATA, 1 << CASCADE_IRQ);
-    io_wait();
-
-    outb(PIC2_DATA, 2);
-    io_wait();
-
-    outb(PIC1_DATA, ICW4_8086);
-    io_wait();
-
-    outb(PIC2_DATA, ICW4_8086);
-    io_wait();
-
-    outb(PIC1_DATA, 0);
-    outb(PIC2_DATA, 0);
-}
-
-fn pic_send_eio(irq: u8) {
-    if irq >= 8 {
-        outb(PIC2_COMMAND, PIC_EIO);
+            in("dx") port,
+            out("al") val,
+        )
     }
-    outb(PIC1_COMMAND, PIC_EIO);
+
+    val
 }
 
-pub fn irq_install() {
+/// Needed on older machines to give PIC some time to react. Uses an unused port
+/// and writes to it.
+#[inline(always)]
+pub unsafe fn io_wait(unused_port: u16) {
+    unsafe { outportb(unused_port, 0); }
+}
+
+/* Taken from OSdev wiki, 8259 PIC Article */
+
+const OFFSET_1: u8 = 32;           // vector offset for master PIC
+const OFFSET_2: u8 = OFFSET_1 + 8; // vector offset for slave PIC
+
+/// Remap IRQ 0-15 to IDT entry 32-47. This is requried because by default the
+/// IRQ's are mapped to some exception reserved ISR's in the interrupt descriptor
+/// table.
+fn pic_remap() {
+    unsafe { 
+        // Start initialization in cascade mode. The PIC's will wait for the offset, 
+        // master-slave cascading information, and additional information about the
+        // environment.
+        outportb(PIC1_COMMAND, ICW1_INIT | ICW1_ICW4);
+        io_wait(DEFAULT_WAIT_UNUSED_PORT);
+        outportb(PIC2_COMMAND, ICW1_INIT | ICW1_ICW4);
+        io_wait(DEFAULT_WAIT_UNUSED_PORT);
+
+        // Master PIC vector offset.
+        outportb(PIC1_DATA, OFFSET_1);
+        io_wait(DEFAULT_WAIT_UNUSED_PORT);
+
+        // Slave PIC vector offset.
+        outportb(PIC2_DATA, OFFSET_2);
+        io_wait(DEFAULT_WAIT_UNUSED_PORT);
+
+        // Tell master that there is a slave PIC at IRQ2.
+        outportb(PIC1_DATA, 1 << CASCADE_IRQ);
+        io_wait(DEFAULT_WAIT_UNUSED_PORT);
+
+        // Tell slave PIC its cascade identity.
+        outportb(PIC2_DATA, CASCADE_IRQ);
+        io_wait(DEFAULT_WAIT_UNUSED_PORT);
+
+        // Make PIC's use 8086 mode.
+        outportb(PIC1_DATA, ICW4_8086);
+        io_wait(DEFAULT_WAIT_UNUSED_PORT);
+        outportb(PIC2_DATA, ICW4_8086);
+        io_wait(DEFAULT_WAIT_UNUSED_PORT);
+
+        // Unmask both PICs.
+        outportb(PIC1_DATA, 0);
+        outportb(PIC2_DATA, 0);
+    }
+}
+
+/// Send end of interrupt(EOI) command to PIC after interrupt has been
+/// successfully handled.
+unsafe fn pic_send_eio(irq: u8) {
+    unsafe {
+        // IRQ came from slave PIC, so it must be send EOI as well.
+        if irq >= 8 {
+            outportb(PIC2_COMMAND, PIC_EIO);
+        }
+
+        outportb(PIC1_COMMAND, PIC_EIO);
+    }
+}
+
+pub unsafe fn irq_install() {
+    // Remap the IRQs by reprogramming the PIC.
     pic_remap();
+
+    // Install IRQs starting from OFFSET_1 = 32.
+    assert!(OFFSET_1 == 32 && OFFSET_2 == 40, "Tried to initialize IRQ at wrong offsets");
 
     isr::IDT::set_gate(32, _irq0,  0x08, 0x8E);
     isr::IDT::set_gate(33, _irq1,  0x08, 0x8E);
@@ -162,21 +222,23 @@ pub fn irq_install() {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn irq_handler(regs: &isr::RegState) {
-    let irq = regs.int_no as u8 - 32;
-    let irq = irq as usize;
+#[inline(never)]
+pub unsafe extern "C" fn irq_handler(regs: isr::InterruptStackFrame) {
+    let int_no = unsafe { (&raw const (*regs).int_no).read_unaligned() };
 
-    // println!("RegState: {:#?}", regs);
+    let irq = int_no as u8 - OFFSET_1;
 
-    // println!("going to handle IRQ#{}, error code: {}", irq, regs.err_code as u8);
+    // println!("going to handle IRQ#{}", irq);
 
     if let Some(handler) = IRQRoutines::get_handler(irq) {
-        handler(regs);
+        unsafe { handler(regs); }
+    } else {
+        panic!("Tried to handle IRQ#{}, but it had no handler.", irq);
     }
 
-    // println!("handled");
+    // println!("handled IRQ#{}", irq);
 
     // Send EOI command.
-    pic_send_eio(irq as u8);
+    unsafe { pic_send_eio(irq as u8); }
 }
 

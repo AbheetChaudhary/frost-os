@@ -13,20 +13,23 @@ release: loader irq isr gdt
     grub-mkrescue -o build/frost.iso build/iso
 
 loader:
-    as --32 src/loader.S -o build/loader.o
+    nasm -felf32 src/loader.asm -o build/loader.o
 
 irq:
-    as --32 src/irq.S -o build/irq.o
+    nasm -felf32 src/irq.asm -o build/irq.o
 
 isr:
-    as --32 src/isr.S -o build/isr.o
+    nasm -felf32 src/isr.asm -o build/isr.o
 
 gdt:
-    as --32 src/gdt.S -o build/gdt.o
+    nasm -felf32 src/gdt.asm -o build/gdt.o
 
-run: build
+# Build and run.
+full: build run
+
+run:
     qemu-system-i386 -cdrom build/frost.iso -serial stdio -no-reboot -no-shutdown \
-        -d int,cpu_reset
+        -d int,cpu_reset -net none
 
 clean:
     rm build/loader.o build/kernel.bin build/frost.iso build/isr.o build/irq.o \

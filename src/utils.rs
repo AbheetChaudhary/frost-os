@@ -1,6 +1,6 @@
 use core::arch::asm;
 
-use crate::println;
+use crate::{println, print, timer};
 
 pub fn print_segment_registers() {
     let cs: u16;
@@ -69,34 +69,128 @@ pub fn read_msr(msr: u32) -> u64 {
     ((hi as u64) << 32) | lo as u64
 }
 
-// Ticks elapsed in 1 second. Value may vary with system.
-// Use `sudo dmesg | grep tsc` to get it.
-const SEC_TICKS: u64 = 1_190_400_000;
+// // Ticks elapsed in 1 second. Value may vary with system.
+// // Use `sudo dmesg | grep tsc` to get it.
+// const SEC_TICKS: u64 = 1_190_400_000;
 
-// Ticks elapsed in 1 millisecond.
-const MILLISEC_TICKS: u64 = 1_190_400;
+// // Ticks elapsed in 1 millisecond.
+// const MILLISEC_TICKS: u64 = 1_190_400;
 
-fn rdtsc() -> u64 {
-    unsafe { core::arch::x86::_rdtsc() }
-}
+// fn rdtsc() -> u64 {
+//     unsafe { core::arch::x86::_rdtsc() }
+// }
 
-/// Do nothing for `secs` number of seconds.
-pub fn sleep_secs(secs: u64) {
-    let begin = rdtsc();
-    let end = begin + (secs * SEC_TICKS);
+// pub fn sleep_secs(secs: usize) {
+//     let begin = rdtsc();
+//     let end = begin + (secs as u64 * SEC_TICKS);
 
-    while rdtsc() < end {
-        core::hint::black_box(());
+//     while rdtsc() < end {
+//         core::hint::black_box(());
+//     }
+// }
+
+// pub fn sleep_millis(millis: usize) {
+//     let begin = rdtsc();
+//     let end = begin + (millis as u64 * MILLISEC_TICKS);
+
+//     while rdtsc() < end {
+//         core::hint::black_box(());
+//     }
+// }
+
+/// Do nothing(spin) for `secs` number of seconds.
+pub fn sleep_secs(secs: usize) {
+    let current_ticks = timer::get_current_ticks();
+
+    let end_ticks = match current_ticks.checked_add(timer::SYSTEM_TIMER_FREQ * secs) {
+        Some(t) => t,
+        None    => {
+            panic!("trying to sleep for {} seconds will overflow the system tick count.",
+                secs);
+        }
+    };
+
+    // TODO: do it in a better way after implementing scheduler.
+    while timer::get_current_ticks() < end_ticks {
+        core::hint::spin_loop();
     }
 }
 
-/// Do nothing for `millis` number of milliseconds.
-pub fn sleep_millis(millis: u64) {
-    let begin = rdtsc();
-    let end = begin + (millis * MILLISEC_TICKS);
+/// Do nothing(spin) for `millis` number of milliseconds.
+pub fn sleep_millis(millis: usize) {
+    const MILLIS_PER_TICK: usize = 1000 / timer::SYSTEM_TIMER_FREQ;
 
-    while rdtsc() < end {
-        core::hint::black_box(());
+    if MILLIS_PER_TICK < 1 {
+        panic!("Trying to use a very high frequency timer?");
+    }
+
+    // Number of ticks we should wait for in order to let `millis` ms pass.
+    //
+    // For 100Hz system clock, there will be 10ms per tick. So any attempt to
+    // sleep for less than 10ms will end up in a 10ms sleep.
+    //
+    // For sleep durations greater than 10ms, the number of ticks will be
+    // rounded up. So 2 ticks for 15ms and 3 ticks for 21ms sleep durations.
+    let delta_ticks = if millis < MILLIS_PER_TICK {
+        1
+    } else {
+        millis.div_ceil(MILLIS_PER_TICK)
+    };
+
+    let current_ticks = timer::get_current_ticks();
+
+    let end_ticks = match current_ticks.checked_add(delta_ticks) {
+        Some(t) => t,
+        None    => {
+            panic!("trying to sleep for {} millis will overflow the system tick count.",
+                millis);
+        }
+    };
+
+    // TODO: do it in a better way after implementing scheduler.
+    while timer::get_current_ticks() < end_ticks {
+        core::hint::spin_loop();
     }
 }
 
+pub unsafe fn mem_dump(ptr: *const u8, len: usize) {
+    println!("\n#####################################################");
+    println!("Memory Dump: ptr = {ptr:p}, length: 0x{len:x}\n");
+
+    let mut i = 0;
+
+    let mut pairs_on_this_line = 0; // goes up to 8, then print a newline.
+
+    while i + 2 <= len {
+        if pairs_on_this_line == 8 {
+            print!("\n");
+            pairs_on_this_line = 0;
+        }
+
+        if pairs_on_this_line > 0 {
+            print!(" ");
+        }
+
+        let b_lo = unsafe { ptr.add(i).read() };
+        let b_hi = unsafe { ptr.add(i + 1).read() };
+
+        print!("{b_lo:02x}{b_hi:02x}");
+
+        pairs_on_this_line += 1;
+
+        i += 2;
+    }
+
+    // If true then there is only one byte remaining to print.
+    if i < len {
+        if pairs_on_this_line == 8 {
+            print!("\n");
+        }
+
+        let b_lo = unsafe { ptr.add(i).read() };
+
+        print!("{b_lo:0x}");
+    }
+
+    println!("\n#####################################################\n");
+}
