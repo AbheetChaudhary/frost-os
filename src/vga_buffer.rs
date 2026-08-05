@@ -6,13 +6,13 @@ use core::fmt;
 use core::cell::UnsafeCell;
 
 pub static WRITER: SpinLock<VgaBuffer> = {
-    // SAFETY:
-    // It is the only instance of VgaBuffer.
+    // SAFETY: It is the only instance of VgaBuffer.
     let vga_buffer: VgaBuffer = unsafe { VgaBuffer::new() };
     SpinLock::new(vga_buffer)
 };
 
 
+// DROP?
 pub struct SpinLock<T> {
     locked: AtomicBool,
     data: UnsafeCell<T>,
@@ -53,8 +53,8 @@ impl<T> SpinLock<T> {
             match exchange {
                 Ok(_) => {
                     break SpinGuard {
-                        lock: self,
-                        marker: core::marker::PhantomData,
+                        lock:     self,
+                        __marker: core::marker::PhantomData,
                     };
                 }
                 Err(_) => {
@@ -66,8 +66,8 @@ impl<T> SpinLock<T> {
 }
 
 pub struct SpinGuard<'lock, T> {
-    lock: &'lock SpinLock<T>,
-    marker: core::marker::PhantomData<*const ()>, // no sync send, covariant
+    lock:     &'lock SpinLock<T>,
+    __marker: core::marker::PhantomData<*const ()>, // no sync send, covariant
 }
 
 impl<'lock, T> Drop for SpinGuard<'lock, T> {
@@ -124,7 +124,8 @@ const BUFFER_SIZE: usize = WIDTH * HEIGHT;
 pub struct Attribute(u8);
 
 impl Attribute {
-    /// Generate a Attribute from background and foreground Color and blink.
+    /// Generate an Attribute from background and foreground Color and blink.
+    ///
     /// Only the lower 3 bits of the background are used, the upper most bit is
     /// taken from blink.
     pub const fn from(bg: Color, fg: Color, blink: bool) -> Self {

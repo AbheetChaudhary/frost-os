@@ -1,18 +1,55 @@
 use crate::{println};
 
+use core::arch::asm;
+
+/// Global descriptor table register memory location. This is what will be
+/// loaded by the `lgdt` instruction to finally flush the GDT.
+static mut GDTR: Gdtr = Gdtr { size: 0, base: 0 };
+
+/// Flush the global descriptor table by calling `lgdt` and update the data
+/// segments as well.
+///
+/// # SAFETY
+///
+/// The correct kernel code and data segment descriptor must be loaded at offset
+/// 0x08 and 0x10 respectively.
+unsafe extern "C" fn gdt_flush(gdtr: *const Gdtr) {
+    // Due to a bug in llvm we need to use att syntax to make a far jump.
+    //
+    // https://www.reddit.com/r/rust/comments/o8lrz8/how_do_i_get_a_far_absolute_jump_with_inline
+    unsafe {
+        asm!(r#"
+                lgdt    ({gdtr})
+
+                ljmp    $0x08, $2f
+
+            2:
+                mov     %ax, %ds
+                mov     %ax, %es
+                mov     %ax, %fs
+                mov     %ax, %gs
+                mov     %ax, %ss
+            "#,
+
+            gdtr = in(reg) gdtr.addr(),
+            in("ax") 0x10,
+
+            options(att_syntax),
+        )
+    }
+}
+
+pub fn get_gdtr_address() -> *const Gdtr {
+    &raw const GDTR
+}
+
 #[repr(C, packed)]
-pub struct GDTR {
+pub struct Gdtr {
     /// Size of the table in bytes, minus 1.
     size: u16,
 
     /// Linear address of the GDT, not the physical address..???
     base:  u32,
-}
-
-unsafe extern "C" {
-    static mut _gdtr: GDTR;
-
-    fn _gdt_flush();
 }
 
 // Refer osdev website.
@@ -152,16 +189,16 @@ impl GDT {
         println!("[gdt_install]: limit = 0x{:02x}", size);
         println!("[gdt_install]: base  = 0x{:02x}", base);
 
-        let ptr = ((&raw mut _gdtr) as *mut GDTR).cast::<u8>();
+        let ptr = ((&raw mut GDTR) as *mut Gdtr).cast::<u8>();
 
         unsafe {
-            // GDTR is a packed struct, so pointers to its fields may not be
+            // Gdtr is a packed struct, so pointers to its fields may not be
             // aligned.
             ptr.cast::<u16>().write_unaligned(size);
             ptr.add(2).cast::<u32>().write_unaligned(base);
         }
 
-        unsafe { _gdt_flush() };
+        unsafe { gdt_flush(&raw const GDTR) };
     }
 }
 

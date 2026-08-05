@@ -1,7 +1,8 @@
 use core::arch::asm;
 
-use crate::{isr, println};
+use crate::{isr};
 
+#[link(name = "irq.o", kind = "dylib", modifiers = "+verbatim")]
 unsafe extern "C" {
     fn _irq0();  fn _irq1();  fn _irq2();  fn _irq3();
     fn _irq4();  fn _irq5();  fn _irq6();  fn _irq7();
@@ -33,7 +34,8 @@ impl IRQRoutines {
             let handler = core::mem::transmute(handler);
             ptr.add(irq_idx as usize).write_volatile(handler);
         }
-        println!("installed handler for IRQ{}", irq_idx);
+
+        // println!("installed handler for IRQ{}", irq_idx);
     }
 
     pub unsafe fn uninstall_handler(irq_idx: u8) {
@@ -233,7 +235,7 @@ pub unsafe extern "C" fn irq_handler(regs: isr::InterruptStackFrame) {
     if let Some(handler) = IRQRoutines::get_handler(irq) {
         unsafe { handler(regs); }
     } else {
-        panic!("Tried to handle IRQ#{}, but it had no handler.", irq);
+        panic!("Tried to handle IRQ#{}, but it had no handler installed.", irq);
     }
 
     // println!("handled IRQ#{}", irq);

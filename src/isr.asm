@@ -124,6 +124,11 @@ isr_common_stub:
     ; C code following the sysV ABI requires DF to be clear on function entry
     cld
 
+    ; Indirect near call to `exception_handler`.
+    ;
+    ; For a flat 32-bit kernel, the called function could be anywhere in the
+    ; 4GiB range, `call` instruction will only push the EIP and it will still
+    ; work correctly with the `extern "C"` abi.
     mov     eax, exception_handler
     call    eax
 

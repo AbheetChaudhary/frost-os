@@ -74,7 +74,12 @@ irq_common_stub:
     ; C code following the sysV ABI requires DF to be clear on function entry
     cld
 
-    mov     eax, irq_handler ; TODO: what about near/far call?
+    ; Indirect near call to `irq_handler`.
+    ;
+    ; For a flat 32-bit kernel, the called function could be anywhere in the
+    ; 4GiB range, `call` instruction will only push the EIP and it will still
+    ; work correctly with the `extern "C"` abi.
+    mov     eax, irq_handler
     call    eax
 
     pop     eax

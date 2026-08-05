@@ -1,5 +1,12 @@
 [build]
 target = "i686-kernel.json"
+rustflags = [
+    "-L", "native=./build",
+    "-C", "link-arg=--entry=kernel_entry",
+    "-C", "link-arg=--relocatable",
+    "-C", "relocation-model=static",
+    "-C", "code-model=kernel",
+]
 
 [unstable]
 json-target-spec = true

@@ -5,6 +5,7 @@ use crate::{println, print};
 
 // These are function pointers to ISR's from 0-31. All of them are reserved for
 // CPU exceptions.
+#[link(name = "isr.o", kind = "dylib", modifiers = "+verbatim")]
 unsafe extern "C" {
     fn _isr0();  fn _isr1();  fn _isr2();  fn _isr3();  
     fn _isr4();  fn _isr5();  fn _isr6();  fn _isr7();  
@@ -25,15 +26,12 @@ const EXCEPTION_ISR_FN_PTRS: [unsafe extern "C" fn(); 32] = [
 ];
 
 #[repr(C, packed)]
-struct IDTR {
+struct Idtr {
     size: u16,
     base: u32,
 }
 
-unsafe extern "C" {
-    /// External symbol defined in assembly file.
-    static mut _idtr: IDTR;
-}
+static mut IDTR: Idtr = Idtr { size: 0, base: 0 };
 
 static mut GLOBAL_IDT: [IDTEntry; 256] = [IDTEntry::const_default(); 256];
 
@@ -178,15 +176,15 @@ impl IDT {
 
     fn flush() {
         unsafe {
-            _idtr.size = 256 * size_of::<IDTEntry>() as u16 - 1;
-            _idtr.base = &raw const GLOBAL_IDT as u32;
+            IDTR.size = 256 * size_of::<IDTEntry>() as u16 - 1;
+            IDTR.base = &raw const GLOBAL_IDT as u32;
         }
 
         unsafe {
             asm!(
                 "lidt [{}]",
 
-                in(reg) (&raw const _idtr),
+                in(reg) (&raw const IDTR),
             );
         }
     }

@@ -8,12 +8,6 @@
 #![no_main]
 #![no_std]
 
-use core::arch::asm;
-
-unsafe extern "C" {
-    static mut _gdtr: gdt::GDTR;
-}
-
 pub mod vga_buffer;
 pub mod utils;
 pub mod isr;
@@ -21,6 +15,7 @@ pub mod irq;
 pub mod timer;
 pub mod keyboard;
 pub mod gdt;
+pub mod cpu;
 
 use vga_buffer::*;
 
@@ -37,32 +32,14 @@ fn panic_handler(info: &core::panic::PanicInfo) -> ! {
     loop {}
 }
 
-#[inline(always)]
-unsafe fn disable_interrupts() {
-    unsafe {
-        asm!(
-            "cli"
-        );
-    }
-}
-
-#[inline(always)]
-unsafe fn enable_interrupts() {
-    unsafe {
-        asm!(
-            "sti"
-        );
-    }
-}
-
 #[unsafe(no_mangle)]
-fn kernel_main(_: *const (), magic_number: u32) -> ! {
+pub fn kernel_entry(_: *const (), magic_number: u32) -> ! {
     WRITER.lock().clear_screen();
 
     println!("machine spirit appeased...");
     println!("magic number: 0x{:x}", magic_number);
 
-    unsafe { disable_interrupts(); }
+    unsafe { cpu::disable_interrupts(); }
 
     let mut gdt: gdt::GDT = Default::default();
     gdt.push_default_null_segment();
@@ -71,7 +48,7 @@ fn kernel_main(_: *const (), magic_number: u32) -> ! {
 
     gdt.gdt_install();
 
-    unsafe { utils::mem_dump(&raw const _gdtr as *const u8, 36); }
+    unsafe { utils::mem_dump(gdt::get_gdtr_address().cast(), 36); }
 
     unsafe {
         isr::isr_install();
@@ -83,7 +60,7 @@ fn kernel_main(_: *const (), magic_number: u32) -> ! {
     timer::install();
     println!("...installed timer");
 
-    unsafe { enable_interrupts(); }
+    unsafe { cpu::enable_interrupts(); }
 
     println!("...enabled interrupts");
 
@@ -101,5 +78,18 @@ fn kernel_main(_: *const (), magic_number: u32) -> ! {
     keyboard::install();
     println!("...initialized keyboard");
 
+    if cpu::has_cpuid() {
+        println!("...has CPUID=true");
+        let extended_cpuid = unsafe { cpu::has_extended_cpuid() };
+        println!("...has extended CPUID={}", extended_cpuid);
+
+        println!("...has long mode={}", unsafe { cpu::has_long_mode() });
+    } else {
+        println!("...has CPUID=false");
+    }
+
+    println!("kernel_entry: {:p}", kernel_entry as *const u8);
+ 
     loop {}
 }
+

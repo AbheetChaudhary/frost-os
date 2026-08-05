@@ -8,5 +8,12 @@ edition = "2024"
 [profile.dev]
 panic = "abort"
 
-[lib]
-crate-type = ["staticlib"]
+[profile.release]
+opt-level = "z"
+panic = "abort"
+lto = true
+strip = true
+codegen-units = 1
+
+# [lib]
+# crate-type = ["staticlib"]
