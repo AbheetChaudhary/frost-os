@@ -1,4 +1,4 @@
-use crate::{println};
+use crate::prelude::*;
 
 use core::arch::asm;
 
@@ -186,8 +186,8 @@ impl GDT {
         let size = 8 * (self.entries as u16) - 1;
         let base = &raw const GLOBAL_DESC_TABLE as u32;
 
-        println!("[gdt_install]: limit = 0x{:02x}", size);
-        println!("[gdt_install]: base  = 0x{:02x}", base);
+        serial!("[gdt_install]: limit = 0x{:02x}\n", size);
+        serial!("[gdt_install]: base  = 0x{:02x}\n", base);
 
         let ptr = ((&raw mut GDTR) as *mut Gdtr).cast::<u8>();
 

@@ -95,3 +95,42 @@ pub unsafe fn has_long_mode() -> bool {
     (edx & (1 << 29)) != 0
 }
 
+pub fn read_cr0() -> usize {
+    let cr0;
+    unsafe {
+        asm!(
+            "mov {0}, cr0",
+
+            out(reg) cr0
+        )
+    }
+
+    cr0
+}
+
+pub fn read_cr2() -> usize {
+    let cr2;
+    unsafe {
+        asm!(
+            "mov {0}, cr2",
+
+            out(reg) cr2
+        )
+    }
+
+    cr2
+}
+
+pub fn read_cr3() -> usize {
+    let cr3;
+    unsafe {
+        asm!(
+            "mov {0}, cr3",
+
+            out(reg) cr3
+        )
+    }
+
+    cr3
+}
+

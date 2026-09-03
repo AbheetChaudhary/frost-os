@@ -2,14 +2,16 @@
 # and the loader.o to create the final image for grub.
 dev: loader irq isr
     cargo build
-    ld --script src/linker.ld build/loader.o target/i686-kernel/debug/frost -o build/kernel.bin
+    ld --script src/linker.ld build/loader.o target/i686-kernel/debug/frost \
+        -o build/kernel.bin
     cp build/kernel.bin build/iso/boot
     grub-mkrescue -o build/frost.iso build/iso
 
 # Same as `dev` above, just use `--release` for the kernel.
 release: loader irq isr
     cargo build --release
-    ld --script src/linker.ld build/loader.o target/i686-kernel/release/frost -o build/kernel.bin
+    ld --script src/linker.ld build/loader.o target/i686-kernel/release/frost \
+        -o build/kernel.bin
     cp build/kernel.bin build/iso/boot
     grub-mkrescue -o build/frost.iso build/iso
 
@@ -30,13 +32,13 @@ grub:
     cp build/kernel.bin build/iso/boot
     grub-mkrescue -o build/frost.iso build/iso
 
-# Build(debug) and run.
+# Build(debug mode) and run.
 full: dev run
 
 # Run QEMU
 run:
-    qemu-system-i386 -cdrom build/frost.iso -serial stdio -no-reboot -no-shutdown \
-        -d int,cpu_reset -net none -m 128 -smp 4
+    qemu-system-i386 -cdrom build/frost.iso -serial stdio -no-shutdown \
+        -net none -m 128 -smp 4
 
 clean:
     rm build/loader.o build/kernel.bin build/frost.iso build/isr.o build/irq.o \

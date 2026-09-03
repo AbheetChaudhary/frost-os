@@ -5,6 +5,8 @@ use core::ptr::NonNull;
 use core::fmt;
 use core::cell::UnsafeCell;
 
+// use crate::mm::HIGHER_BEGIN;
+
 pub static WRITER: SpinLock<VgaBuffer> = {
     // SAFETY: It is the only instance of VgaBuffer.
     let vga_buffer: VgaBuffer = unsafe { VgaBuffer::new() };
@@ -187,7 +189,7 @@ impl VgaBuffer {
     /// instance of it. Just use the global one.
     pub const unsafe fn new() -> Self {
         VgaBuffer {
-            ptr:  NonNull::new(0xb8000 as *mut u16).unwrap(),
+            ptr:  NonNull::new((/* HIGHER_BEGIN + */ 0xb8000) as *mut u16).unwrap(),
             attr: Attribute::from(Color::Black, Color::LightGreen, false),
             pos:  Position { x: 0, y: 0 },
         }

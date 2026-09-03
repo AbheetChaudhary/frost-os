@@ -2,18 +2,23 @@ ENTRY(_multiboot_entry)
 OUTPUT_FORMAT(elf32-i386)
 OUTPUT_ARCH(i386:i386)
 
+KERNEL_VMA = 0xC0000000;
+KERNEL_LMA = 0x100000;
+KERNEL_OFFSET = KERNEL_VMA - KERNEL_LMA;
+
 SECTIONS
 {
-    . = 0x100000;
+    /* . = 0x100000; */
+    . = KERNEL_VMA;
 
-    .text :
+    .text : AT(ADDR(.text) - KERNEL_OFFSET)
     {
         *(.multiboot)
         *(.text*)
         *(.rodata*)
     }
 
-    .data :
+    .data : AT(ADDR(.data) - KERNEL_OFFSET)
     {
         start_ctors = .;
         KEEP(*(.init_array));
@@ -23,7 +28,7 @@ SECTIONS
         *(.data*)
     }
 
-    .bss :
+    .bss : AT(ADDR(.bss) - KERNEL_OFFSET)
     {
         *(.bss*)
     }

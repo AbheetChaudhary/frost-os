@@ -1,4 +1,4 @@
-use crate::{irq, isr, print};
+use crate::{irq, isr};
 
 use irq::inportb;
 
@@ -60,12 +60,14 @@ pub fn install() {
 }
 
 unsafe extern "C" fn keyboard_irq_handler(_: isr::InterruptStackFrame) {
-    let scancode = unsafe { inportb(KBD_CONTROLLER_DATA_REG) };
+    let _scancode = unsafe { inportb(KBD_CONTROLLER_DATA_REG) };
 
+    /*
     if scancode & 0x80 != 0 {
         // Key release.
     } else {
         let key = KBD_US[scancode as usize];
         print!("{}", char::from(key));
     }
+    */
 }

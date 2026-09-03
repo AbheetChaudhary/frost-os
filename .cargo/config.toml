@@ -3,10 +3,13 @@ target = "i686-kernel.json"
 rustflags = [
     "-L", "native=./build",
     "-C", "link-arg=--entry=kernel_entry",
-    "-C", "link-arg=--relocatable",
-    "-C", "relocation-model=static",
+    "-C", "link-arg=--image-base=0xC0000000",
     "-C", "code-model=kernel",
+    "-C", "relocation-model=static",
 ]
+# "-C", "link-arg=--relocatable",
+# "-C", "link-arg=--image-base=0xC0000000",
+# "-C", "relocation-model=static",
 
 [unstable]
 json-target-spec = true

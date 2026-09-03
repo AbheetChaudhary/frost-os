@@ -1,11 +1,12 @@
 use core::arch::asm;
 use core::mem::MaybeUninit;
 
-use crate::{println, print};
+// use crate::{serial};
+use crate::prelude::*;
 
 // These are function pointers to ISR's from 0-31. All of them are reserved for
 // CPU exceptions.
-#[link(name = "isr.o", kind = "dylib", modifiers = "+verbatim")]
+#[link(name = "isr.o", kind = "static", modifiers = "+verbatim")]
 unsafe extern "C" {
     fn _isr0();  fn _isr1();  fn _isr2();  fn _isr3();  
     fn _isr4();  fn _isr5();  fn _isr6();  fn _isr7();  
@@ -144,12 +145,12 @@ impl IDTEntry {
 /// For now, all the exceptions have an ISR that eventually reaches here.
 #[unsafe(no_mangle)]
 #[inline(never)]
-pub extern "C" fn exception_handler(regs: InterruptStackFrame) {
+pub unsafe extern "C" fn exception_handler(regs: InterruptStackFrame) {
     let int_no = unsafe { (&raw const (*regs).int_no).read_unaligned() };
 
     if int_no < 32 {
-        print!("{}", EXCEPTION_MESSAGES[int_no as usize]);
-        println!(". System Halted!");
+        serial!("{}", EXCEPTION_MESSAGES[int_no as usize]);
+        serial!(". System Halted!\n");
 
         loop {}
     }

@@ -1,6 +1,6 @@
 use core::arch::asm;
 
-use crate::{println, print, timer};
+use crate::{timer, serial};
 
 pub fn print_segment_registers() {
     let cs: u16;
@@ -28,12 +28,12 @@ pub fn print_segment_registers() {
         );
     }
 
-    println!("cs = {:#06x}", cs);
-    println!("ss = {:#06x}", ss);
-    println!("ds = {:#06x}", ds);
-    println!("es = {:#06x}", es);
-    println!("fs = {:#06x}", fs);
-    println!("gs = {:#06x}", gs);
+    serial!("cs = {:#06x}\n", cs);
+    serial!("ss = {:#06x}\n", ss);
+    serial!("ds = {:#06x}\n", ds);
+    serial!("es = {:#06x}\n", es);
+    serial!("fs = {:#06x}\n", fs);
+    serial!("gs = {:#06x}\n", gs);
 
     print_segment(cs);
     print_segment(ss);
@@ -48,7 +48,7 @@ pub fn print_segment(seg: u16) {
     let table = (seg >> 1) & 0x1;
     let rpl = seg & 0x3;
 
-    println!("index: {}, table: {}, rpl: {}", idx,
+    serial!("index: {}, table: {}, rpl: {}\n", idx,
         if table == 0 { "GDT"} else { "LDT" }, rpl);
 }
 
@@ -154,8 +154,8 @@ pub fn sleep_millis(millis: usize) {
 }
 
 pub unsafe fn mem_dump(ptr: *const u8, len: usize) {
-    println!("\n#####################################################");
-    println!("Memory Dump: ptr = {ptr:p}, length: 0x{len:x}\n");
+    serial!("\n#####################################################\n");
+    serial!("Memory Dump: ptr = {ptr:p}, length: 0x{len:x}\n\n");
 
     let mut i = 0;
 
@@ -163,18 +163,18 @@ pub unsafe fn mem_dump(ptr: *const u8, len: usize) {
 
     while i + 2 <= len {
         if pairs_on_this_line == 8 {
-            print!("\n");
+            serial!("\n");
             pairs_on_this_line = 0;
         }
 
         if pairs_on_this_line > 0 {
-            print!(" ");
+            serial!(" ");
         }
 
-        let b_lo = unsafe { ptr.add(i).read() };
-        let b_hi = unsafe { ptr.add(i + 1).read() };
+        let b_lo = unsafe { ptr.add(i).read_volatile() };
+        let b_hi = unsafe { ptr.add(i + 1).read_volatile() };
 
-        print!("{b_lo:02x}{b_hi:02x}");
+        serial!("{b_lo:02x}{b_hi:02x}");
 
         pairs_on_this_line += 1;
 
@@ -184,13 +184,13 @@ pub unsafe fn mem_dump(ptr: *const u8, len: usize) {
     // If true then there is only one byte remaining to print.
     if i < len {
         if pairs_on_this_line == 8 {
-            print!("\n");
+            serial!("\n");
         }
 
-        let b_lo = unsafe { ptr.add(i).read() };
+        let b_lo = unsafe { ptr.add(i).read_volatile() };
 
-        print!("{b_lo:0x}");
+        serial!("{b_lo:0x}");
     }
 
-    println!("\n#####################################################\n");
+    serial!("\n#####################################################\n\n");
 }
