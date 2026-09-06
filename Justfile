@@ -1,45 +1,25 @@
-# Rebuild the assembly files, then the kernel as relocatable elf, then link the kernel
-# and the loader.o to create the final image for grub.
-dev: loader irq isr
-    cargo build
-    ld --script src/linker.ld build/loader.o target/i686-kernel/debug/frost \
-        -o build/kernel.bin
-    cp build/kernel.bin build/iso/boot
-    grub-mkrescue -o build/frost.iso build/iso
-
-# Same as `dev` above, just use `--release` for the kernel.
-release: loader irq isr
+[working-directory: 'kernel']
+kernel:
     cargo build --release
-    ld --script src/linker.ld build/loader.o target/i686-kernel/release/frost \
-        -o build/kernel.bin
-    cp build/kernel.bin build/iso/boot
-    grub-mkrescue -o build/frost.iso build/iso
 
-# Build the `loader.o` relocatable object file.
-loader:
-    nasm -felf32 src/loader.asm -o build/loader.o
+[working-directory: 'kernel']
+dev-kernel:
+    cargo build
 
-# Build `irq.o` relocatable object file.
-irq:
-    nasm -felf32 src/irq.asm -o build/irq.o
+[working-directory: 'bootloader']
+uefi:
+    cargo build --release
 
-# Build `isr.o` relocatable object file.
-isr:
-    nasm -felf32 src/isr.asm -o build/isr.o
+[working-directory: 'bootloader']
+dev-uefi:
+    cargo build
 
-# Only build the grub disk image from the linked kernel.
-grub:
-    cp build/kernel.bin build/iso/boot
-    grub-mkrescue -o build/frost.iso build/iso
+build: kernel uefi
 
-# Build(debug mode) and run.
-full: dev run
+dev-build: dev-kernel dev-uefi
 
-# Run QEMU
 run:
-    qemu-system-i386 -cdrom build/frost.iso -serial stdio -no-shutdown \
-        -net none -m 128 -smp 4
+    ./scripts/build-ia32.sh
+    ./scripts/qemu-ia32.sh
 
-clean:
-    rm build/loader.o build/kernel.bin build/frost.iso build/isr.o build/irq.o \
-        build/iso/boot/kernel.bin
+full: build run
