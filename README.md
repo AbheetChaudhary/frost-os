@@ -42,3 +42,17 @@ These resources were invaluable to get up and running in the first few weeks:
 
 Over time the Intel Software Developer Manuals, UEFI/ACPI specifications and
 OSDev forums became the main resources.
+
+## LLM Usage
+
+### For Code Generation
+
+None.
+
+### For Debugging
+
+Some usage.
+
+...like using to find inconsistencies between what my code comments said what
+is happening vs what the code was actually doing. That helped in quickly
+finding some stupid mistakes and off by one errors during debugging.
