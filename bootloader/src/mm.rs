@@ -21,7 +21,7 @@ pub enum PhysMemType {
     KernelData,
     KernelRodata,
 
-    /// Any region below the first 1MiB in the physical address space.
+    /// Any unused region below the first 1MiB in the physical address space.
     BiosRegion,
 
     ReservedMemoryType,

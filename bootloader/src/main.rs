@@ -56,7 +56,8 @@ pub fn debug_dump(phys_mem: &mm::PhysMem) {
     kserial!("active region count: {}\n", phys_mem.active_region_count());
 
     for region in phys_mem.active_regions() {
-        kserial!("{:?}({} pages)\n", region.mem_type(), region.page_count());
+        kserial!("{:?}({} pages, start: {:#x})\n", region.mem_type(),
+        region.page_count(), region.first_addr());
     }
 
     kserial!("---------------------------------------------------\n");
@@ -175,6 +176,8 @@ pub extern "efiapi" fn main(image: uefi::Handle, st: *mut uefi::SystemTable) -> 
 
     let kernel_file = kinit::load_kernel_file(dev_handle);
 
+    let acpi = acpi_stuff();
+
     unsafe {
         kserial::SerialPort::init();
     }
@@ -184,8 +187,6 @@ pub extern "efiapi" fn main(image: uefi::Handle, st: *mut uefi::SystemTable) -> 
         .expect("takeover attempt failed");
 
     debug_dump(&phys_mem);
-
-    acpi_stuff();
 
     unsafe {
         // This has drop glue that triggers boot services. Avoid it getting dropped.
@@ -198,7 +199,7 @@ pub extern "efiapi" fn main(image: uefi::Handle, st: *mut uefi::SystemTable) -> 
 
     kserial!("called exit boot services\n");
     
-    kernel_file.start_kernel(phys_mem);
+    kernel_file.start_kernel(phys_mem, acpi);
 
     /*
     // Eventually call the exit_boot_services().
@@ -208,24 +209,6 @@ pub extern "efiapi" fn main(image: uefi::Handle, st: *mut uefi::SystemTable) -> 
         shutdown(uefi::EfiStatus::Success.into())
     };
     */
-}
-
-pub fn acpi_stuff() {
-    use acpi::*;
-
-    let acpi_ptr = get_config_table(uefi::EFI_ACPI_TABLE_GUID).unwrap();
-    serialn!("acpi_ptr: {:p}", acpi_ptr);
-
-    let raw_rsdp = unsafe { RawRsdp2::read_from_ptr(acpi_ptr.cast()).unwrap() };
-
-    let xsdt_addr: usize = raw_rsdp.xsdt_addr().as_u64().try_into().unwrap();
-    serialn!("xsdt_addr: 0x{:x}", xsdt_addr);
-
-    let raw_xsdt_ptr: *const RawXsdt = core::ptr::with_exposed_provenance(xsdt_addr);
-    let xsdt = unsafe { XsdtRef::from_raw_xsdt_ptr(raw_xsdt_ptr).unwrap() };
-    serial!("successfully got xsdt ref\n");
-
-    xsdt.dump_header_signatures();
 }
 
 /// Dump confituration tables from the global systemtable.
@@ -252,26 +235,6 @@ pub fn dump_config_table() {
         let ct = unsafe { ptr.read() };
         serialn!("{:?}", ct.vendor_guid);
     }
-}
-
-pub fn get_config_table(guid: uefi::Guid) -> Option<*const c_void> {
-    let num_entries = unsafe { (*loader::GLOBAL_ST).num_of_table_entries };
-
-    if num_entries == 0 {
-        return None;
-    }
-
-    let config_table_begin = unsafe { (*loader::GLOBAL_ST).config_table };
-
-    for i in 0..num_entries {
-        let ct = unsafe { config_table_begin.add(i).read() };
-
-        if ct.vendor_guid == guid {
-            return Some(ct.vendor_table);
-        }
-    }
-
-    None
 }
 
 pub unsafe fn shutdown(status: uefi::Status) -> ! {

@@ -134,3 +134,42 @@ pub fn read_cr3() -> usize {
     cr3
 }
 
+// `qemu-system-i386 --machine pc-q35-10.0` gives family=6, model=6, extended model=0.
+pub fn is_modern_ia_processor() -> bool {
+    use core::arch::x86::__cpuid;
+    use crate::serial;
+
+    let ret = __cpuid(1);
+
+    let eax = ret.eax;
+
+    let family = (eax & 0x0000_0f00) >> 8;
+    let extended_model = (eax & 0x000f_0000) >> 16;
+    let model = (eax & 0xf0) >> 4;
+
+    serial!("family: {}, model: {}, extended_model: {}\n", family,
+        model, extended_model);
+
+    family > 0x06 && extended_model > 0x00
+
+}
+
+pub unsafe fn rdmsr(msr: u32) -> u64 {
+    let lo: u32;
+    let hi: u32;
+
+    unsafe {
+        asm!(
+            "rdmsr",
+
+            in("ecx") msr,
+            out("eax") lo,
+            out("edx") hi,
+        );
+    }
+
+    let lo: u64 = lo.into();
+    let hi: u64 = hi.into();
+
+    (hi << 32) | lo
+}

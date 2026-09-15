@@ -14,3 +14,8 @@ qemu-system-i386 \
     --machine pc-q35-10.0,spcr=off \
     --serial stdio
 
+# # For logging, add these too:
+#
+# -d int,cpu_reset,guest_errors \
+# -D qemu.log \
+# --no-reboot --no-shutdown \

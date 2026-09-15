@@ -27,7 +27,7 @@ const EXCEPTION_ISR_FN_PTRS: [unsafe extern "C" fn(); 32] = [
 ];
 
 #[repr(C, packed)]
-struct Idtr {
+pub struct Idtr {
     size: u16,
     base: u32,
 }
@@ -35,6 +35,10 @@ struct Idtr {
 static mut IDTR: Idtr = Idtr { size: 0, base: 0 };
 
 static mut GLOBAL_IDT: [IDTEntry; 256] = [IDTEntry::const_default(); 256];
+
+pub fn get_idtr_address() -> *const Idtr {
+    &raw const IDTR
+}
 
 /// The `isr_common_stub` pushes the registers on stack in a fixed order that
 /// can be referenced as this struct.

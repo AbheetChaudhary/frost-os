@@ -1,5 +1,3 @@
-#![allow(unused)]
-
 use core::sync::atomic::{AtomicBool, Ordering};
 use core::ptr::NonNull;
 use core::fmt;

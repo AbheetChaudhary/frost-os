@@ -397,3 +397,68 @@ pub fn get_memory_map_strict() -> AddressMap {
     }
 }
 
+pub fn get_config_table(guid: uefi::Guid) -> Option<*const c_void> {
+    let num_entries = unsafe { (*GLOBAL_ST).num_of_table_entries };
+
+    if num_entries == 0 {
+        return None;
+    }
+
+    let config_table_begin = unsafe { (*GLOBAL_ST).config_table };
+
+    for i in 0..num_entries {
+        let ct = unsafe { config_table_begin.add(i).read() };
+
+        if ct.vendor_guid == guid {
+            return Some(ct.vendor_table);
+        }
+    }
+
+    None
+}
+
+/// Minimum amount of ACPI information that will be handed over to the kernel.
+#[repr(C)]
+pub struct AcpiHandover {
+    xsdt: usize,
+    apic: usize,
+    hpet: usize,
+}
+
+pub fn acpi_stuff() -> AcpiHandover {
+    use acpi::*;
+
+    let acpi_ptr = get_config_table(uefi::EFI_ACPI_TABLE_GUID).unwrap();
+    serialn!("acpi_ptr: {:p}", acpi_ptr);
+
+    let raw_rsdp = unsafe { RawRsdp2::read_from_ptr(acpi_ptr.cast()).unwrap() };
+
+    let xsdt_addr: usize = raw_rsdp.xsdt_addr().as_u64().try_into().unwrap();
+    serialn!("xsdt_addr: 0x{:x}", xsdt_addr);
+
+    let raw_xsdt_ptr: *const RawXsdt = core::ptr::with_exposed_provenance(xsdt_addr);
+    let xsdt = unsafe { XsdtRef::from_raw_xsdt_ptr(raw_xsdt_ptr).unwrap() };
+    serial!("successfully got xsdt ref\n");
+
+    xsdt.dump_header_signatures();
+
+    let apic_addr = xsdt.find_sdth_addr(*b"APIC")
+        .expect("XSDT does not contain APIC");
+
+    let apic_addr: usize = apic_addr.try_into().unwrap();
+
+    let hpet_addr = xsdt.find_sdth_addr(*b"HPET")
+        .expect("XSDT does not contain HPET");
+
+    let hpet_addr: usize = hpet_addr.try_into().unwrap();
+
+    serial!("xsdt: {:#x}, apic: {:#x}, hpet: {:#x}\n", xsdt_addr, apic_addr,
+        hpet_addr);
+
+    AcpiHandover {
+        xsdt: xsdt_addr,
+        apic: apic_addr,
+        hpet: hpet_addr,
+    }
+}
+

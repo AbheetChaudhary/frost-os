@@ -174,7 +174,7 @@ pub fn load_kernel_file(device: uefi::Handle) -> KernelFile {
 }
 
 impl KernelFile {
-    pub fn start_kernel(&self, mut phys_mem: mm::PhysMem) -> ! {
+    pub fn start_kernel(&self, mut phys_mem: mm::PhysMem, acpi: AcpiHandover) -> ! {
         // Already have the initial physical memory description.
 
         init_segment(&mut phys_mem, self.data, &self.exec)
@@ -189,6 +189,25 @@ impl KernelFile {
         let cr3 = create_virtual_address_map(&mut phys_mem, self)
             .expect("Should have created the virtual memory map");
 
+        let pd = unsafe {
+            cr3.as_ref::<PageDirectory>()
+        };
+
+        let xsdt = unsafe { pd.translate_phys_to_virt(PhysAddr::new(acpi.xsdt))
+            .expect("XSDT still unmapped!") };
+
+        let apic = unsafe { pd.translate_phys_to_virt(PhysAddr::new(acpi.apic))
+            .expect("APIC still unmapped!") };
+
+        let hpet = unsafe { pd.translate_phys_to_virt(PhysAddr::new(acpi.hpet))
+            .expect("HPET still unmapped!") };
+
+        let acpi_virt = AcpiHandover {
+            xsdt: xsdt.addr(),
+            apic: apic.addr(),
+            hpet: hpet.addr(),
+        };
+
         // TODO: find loader stack among boot services data and map only just
         // that region.
 
@@ -196,12 +215,11 @@ impl KernelFile {
 
         kserial!("page table initialized, jumping to kernel entry...\n");
 
-        let kernel_entry: unsafe extern "Rust" fn(mm::PhysMem) -> ! = unsafe {
-            core::mem::transmute(self.entry)
-        };
+        let kernel_entry: unsafe extern "C" fn(*const mm::PhysMem,
+            *const AcpiHandover) -> ! = unsafe { core::mem::transmute(self.entry) };
 
         unsafe {
-            kernel_entry(phys_mem);
+            kernel_entry(&phys_mem, &acpi_virt);
         }
     }
 }
@@ -243,7 +261,7 @@ pub fn prepare_for_memory_takeover() -> Result<mm::PhysMem, mm::Error> {
         }
 
         // Memory type of this region after our takeover.
-        let pmt = mem_type_efi_to_boot(desc.memory_type)
+        let mut pmt = mem_type_efi_to_boot(desc.memory_type)
             .ok_or(mm::Error::InvalidMemType)?;
 
         // Convert from u64 to usize.
@@ -256,6 +274,12 @@ pub fn prepare_for_memory_takeover() -> Result<mm::PhysMem, mm::Error> {
 
         let region_end: usize = region_begin
             .strict_add(num_pages.strict_mul(1<<12) - 1);
+
+        // If the region stays completely within the first 1MB of physical
+        // address space, and it is unused memory then set it to BiosRegion.
+        if region_end < 0x100000 && pmt == mm::PhysMemType::UnusedMemory {
+            pmt = mm::PhysMemType::BiosRegion;
+        }
 
         let region_addr_range = PhysAddrRange::new(
             PhysAddr::new(region_begin),
@@ -464,6 +488,8 @@ pub struct PageDirectory {
 }
 
 impl PageDirectory {
+    // The `frame_alloc` is for allocating PageTables. The provided physical
+    // address does not need to belong to the frame allocator.
     unsafe fn insert_mapping(&mut self, virt: VirtAddr, phys: PhysAddr,
         frame_alloc: &mut FrameAlloc) -> Result<(), PagingError> {
 
@@ -502,7 +528,7 @@ impl PageDirectory {
     }
 
     #[allow(unused)]
-    unsafe fn translate(&self, virt: VirtAddr)
+    unsafe fn translate_virt_to_phys(&self, virt: VirtAddr)
         -> Result<PhysAddr, PagingError>
     {
         let pde_idx = (virt.addr() >> 22) & ((1<<10) - 1);
@@ -518,7 +544,29 @@ impl PageDirectory {
 
         let pt = unsafe { pt_addr.as_ref::<PageTable>() };
 
-        unsafe { pt.translate(virt) }
+        unsafe { pt.translate_virt_to_phys(virt) }
+    }
+
+    unsafe fn translate_phys_to_virt(&self, phys: PhysAddr) -> Option<VirtAddr> {
+        for pde_idx in 0..self.pd_entries.len() {
+            if self.pd_entries[pde_idx].is_empty() {
+                continue;
+            }
+
+            let pt_addr = self.pd_entries[pde_idx].pt_addr()
+                .expect("already checked that the PDE mapping exists.");
+
+            let pt = unsafe { pt_addr.as_ref::<PageTable>() };
+
+            if let Some(pt_idx) = pt.contains(phys) {
+                let pt_idx: usize = pt_idx.try_into().unwrap();
+                let offset = phys.addr() & ((1<<12) - 1);
+                let virt_addr = (pde_idx << 22) | (pt_idx << 12) | offset;
+                return Some(VirtAddr::new(virt_addr));
+            }
+        }
+
+        None
     }
 
     unsafe fn _remove_mapping(&mut self, _virt: VirtAddr)
@@ -569,8 +617,30 @@ impl PageTable {
         Ok(())
     }
 
+    /// Get the page table entry index that contains the physical address of the
+    /// `phys` frame address.
+    fn contains(&self, phys: PhysAddr) -> Option<u32> {
+        // Look for the page table entry with phys_frame_addr frame address.
+        let phys_frame_addr = phys.addr() & !((1<<12) - 1);
+        let phys_frame_addr: u32 = phys_frame_addr.try_into().unwrap();
+
+        for (i, pte) in self.pt_entries.iter().enumerate() {
+            if pte.is_empty() {
+                continue;
+            }
+
+            let pte_u32 = pte.0 & !((1<<12) - 1);
+
+            if pte_u32 == phys_frame_addr {
+                return Some(i.try_into().unwrap())
+            }
+        }
+
+        None
+    }
+
     #[allow(unused)]
-    unsafe fn translate(&self, virt: VirtAddr)
+    unsafe fn translate_virt_to_phys(&self, virt: VirtAddr)
         -> Result<PhysAddr, PagingError> {
 
         let pte_idx = (virt.addr() >> 12) & ((1<<10) - 1);
@@ -602,7 +672,7 @@ impl PageTable {
 fn inspect(pd: &PageDirectory, addr: VirtAddr) {
     kserial!("Virtual({:#x}) --> ", addr.addr());
     kserial!("Physical({:#x})\n",
-        unsafe { pd.translate(addr).expect("translation failed").addr() });
+        unsafe { pd.translate_virt_to_phys(addr).expect("translation failed").addr() });
 }
 
 fn inspect_region(pd: &PageDirectory, region: &mm::PhysMemRegion) {
@@ -751,7 +821,6 @@ pub fn create_virtual_address_map(phys_mem: &mut mm::PhysMem, kernel_file: &Kern
     }
     */
 
-
     // Map kernel code.
     let k_code_virt = kernel_file.exec.virt_addr;
     let k_code_virt = VirtAddr::new(k_code_virt.addr() & !((1<<12) - 1));
@@ -774,6 +843,25 @@ pub fn create_virtual_address_map(phys_mem: &mut mm::PhysMem, kernel_file: &Kern
         &mut frame_alloc)?;
 
     // TODO: map kernel stack.
+
+    // Map the APIC base at virtual address `apic_base`. It is assumed that the
+    // physical address of the apic base is 0xfee00000.
+    // TODO: Instead of hardcoding on kernel side, pass this address to kernel,
+    // do it more cleanly.
+    let apic_base = VirtAddr::new(0xcff00000);
+    unsafe {
+        origin_pd.insert_mapping(apic_base, PhysAddr::new(0xfee00000),
+            &mut frame_alloc)?;
+    }
+
+    // Identity map the trampoline page.
+    // TODO: Instead of hardcoding on kernel side, pass this address to kernel,
+    // do it more cleanly.
+    const AP_TRAMPOLINE_PAGE_IDX: usize = 0x40; // 0x40th page, starting at 0x40000
+    unsafe {
+        origin_pd.insert_mapping(VirtAddr::new(AP_TRAMPOLINE_PAGE_IDX << 12),
+            PhysAddr::new(AP_TRAMPOLINE_PAGE_IDX << 12), &mut frame_alloc)?;
+    }
 
     Ok(origin_pde_begin_addr)
 }

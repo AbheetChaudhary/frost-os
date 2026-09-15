@@ -13,7 +13,7 @@ panic = "abort"
 opt-level = 3
 panic = "abort"
 lto = true
-strip = true
+# strip = true
 codegen-units = 1
 
 # [lib]

@@ -512,25 +512,3 @@ impl XsdtRef {
         }
     }
 }
-
-#[repr(C, packed)]
-pub struct RawFadt {
-    signature: [u8; 4],
-    length: u32,
-    fadt_major_version: u8,
-    _ignore: [u8; 131],
-    pub x_dsdt: PhysAddr64,
-}
-
-#[repr(C, packed)]
-pub struct RawDsdt {
-    signature: [u8; 4],
-    pub length: u32,
-    revision: u8,
-    checksum: u8,
-    oem_id: [u8; 6],
-    oem_table_id: [u8; 8],
-    oem_revision: u32,
-    creator_id: u32,
-    pub definition_block: FlexibleArray<u8>,
-}
