@@ -189,6 +189,8 @@ impl KernelFile {
         let cr3 = create_virtual_address_map(&mut phys_mem, self)
             .expect("Should have created the virtual memory map");
 
+        // This is still valid, we are still in no-paging mode, so cr3 should be
+        // used instead of PAGE_TABLE_START.
         let pd = unsafe {
             cr3.as_ref::<PageDirectory>()
         };
@@ -734,11 +736,20 @@ pub fn create_virtual_address_map(phys_mem: &mut mm::PhysMem, kernel_file: &Kern
     //
     // BiosRegion and ReservedMemoryType will not get any virtual mapping.
 
-    // Allocate memory to hold a single page directory. The origin PD.
-    let origin_pde_region = phys_mem.allocate_region(1, PhysMemType::LoaderData)?;
+    // A region to hold the page directory and the page tables.
+    let page_table_region = phys_mem.allocate_region(1 + 1024,
+        PhysMemType::LoaderData)?;
 
-    // Address at which the origin PD will be located.
-    let origin_pde_begin_addr = origin_pde_region.first();
+    // A frame allocator that will hand over page frames to create the page
+    // tables.
+    let mut frame_alloc = unsafe {
+        FrameAlloc::new(page_table_region).map_err(|_| PagingError::FrameAllocError)?
+    };
+
+    // Allocate a page to hold the root page directory page. This will end up in
+    // cr3.
+    let origin_pde_begin_addr = frame_alloc.allocate_frame()
+        .map_err(|_| PagingError::FrameAllocError)?;
 
     // Fill the page directory with all zeroes.
     for i in 0..1024 {
@@ -755,21 +766,24 @@ pub fn create_virtual_address_map(phys_mem: &mut mm::PhysMem, kernel_file: &Kern
         origin_pde_begin_addr.as_mut::<PageDirectory>()
     };
 
+    // Reserve the part of the virtual address space that will be needed to
+    // represent all the page table mappings.
+    //
+    // Currently the memory containing the page tables is LoaderData, later we
+    // will not identity map this memory.
+    //
+    // PAGE_TABLE_START virtual address will be mapped to origin_pde_begin_addr
+    // physical address.
+    const PAGE_TABLE_START: VirtAddr = VirtAddr::new(32 * 0x100000);
+
     // Virtual address at which we will start mapping things.
     //
     // Large enough that no identity maps of loader code/data will conflict with
     // other mappings.
-    const VIRT_START: usize = 32 * 0x100000; // 8MiB
+    // const virt_start: usize = 32 * 0x100000; // 32MiB
+    let virt_start: usize = PAGE_TABLE_START.addr().strict_add(1025 * 4096);
 
-    let mut virt = VirtAddr::new(VIRT_START);
-
-    // Allocate memory to allocate PTEs. We need only 1024 pages for the PT's.
-    // The origin page for the PD is already there.
-    let pt_region = phys_mem.allocate_region(1024, PhysMemType::LoaderData)?;
-
-    let mut frame_alloc = unsafe {
-        FrameAlloc::new(pt_region).map_err(|_| PagingError::FrameAllocError)?
-    };
+    let mut virt = VirtAddr::new(virt_start);
 
     // Virtual map AcpiMemoryNvs and AcpiReclaimMemory.
     virt = map_region(&phys_mem, origin_pd, virt, PhysMemType::AcpiMemoryNvs, 
@@ -790,10 +804,55 @@ pub fn create_virtual_address_map(phys_mem: &mut mm::PhysMem, kernel_file: &Kern
     // Identity map loader code and data.
     identity_map_region(&phys_mem, origin_pd, PhysMemType::LoaderCode,
         &mut frame_alloc)?;
+    /*
     identity_map_region(&phys_mem, origin_pd, PhysMemType::LoaderData,
         &mut frame_alloc)?;
+    */
 
-    kserial!("done loader code/data virtual map\n");
+    // Identity map loader data, except the physical region that contain the
+    // page table.
+    for region in phys_mem.active_regions() {
+        if region.mem_type() == mm::PhysMemType::LoaderData {
+            // Do not identity map the pages that contain the page table
+            // structures.
+            if region.first() == page_table_region.first() {
+                continue;
+            }
+
+            let region_begin = region.first();
+
+            let mut virt = region_begin.as_virt_addr();
+
+            for _ in 0..region.page_count() {
+                unsafe {
+                    origin_pd.insert_mapping(virt, virt.as_phys_addr(),
+                        &mut frame_alloc)?; 
+                }
+
+                virt = virt.checked_add(1<<12)
+                    .ok_or(PagingError::IntegerOverflow)?;
+            }
+        }
+    }
+    kserial!("done loader code/data(non-paging structures) virtual map\n");
+
+    // Map the entire region that contains page table structures, all 1025
+    // pages, to PAGE_TABLE_START.
+    //
+    // For x86, this will consume just above 4MB of virtual address space
+    // starting from PAGE_TABLE_START.
+    /*
+    for i in 0..1025 {
+        assert!(i < page_table_region.page_count(),
+            "Trying to map invalid physical page.");
+
+        let phys = page_table_region.first().strict_add(i << 12);
+        let virt = PAGE_TABLE_START.strict_add(i << 12);
+
+        unsafe { origin_pd.insert_mapping(virt, phys, &mut frame_alloc)?; }
+    }
+    kserial!("done loader data(paging structures) virtual map\n");
+    */
 
     identity_map_region(&phys_mem, origin_pd, PhysMemType::BootServicesCode,
         &mut frame_alloc).unwrap();
@@ -862,6 +921,44 @@ pub fn create_virtual_address_map(phys_mem: &mut mm::PhysMem, kernel_file: &Kern
         origin_pd.insert_mapping(VirtAddr::new(AP_TRAMPOLINE_PAGE_IDX << 12),
             PhysAddr::new(AP_TRAMPOLINE_PAGE_IDX << 12), &mut frame_alloc)?;
     }
+
+    unsafe {
+        kserial!("mapping... {:#x} => {:#x}\n",
+            PAGE_TABLE_START.addr(), origin_pde_begin_addr.addr());
+        origin_pd.insert_mapping(PAGE_TABLE_START, origin_pde_begin_addr, 
+            &mut frame_alloc)?;
+
+        loop {
+            let used_frames_before = frame_alloc.used_frames();
+            for pde_idx in 0..1024 {
+                if let Some(pt_phys_addr) = origin_pd.pd_entries[pde_idx].pt_addr() {
+                    assert!(page_table_region.contains(pt_phys_addr));
+
+                    let pt_virt_addr = PAGE_TABLE_START
+                        .strict_add((1 + pde_idx) << 12);
+
+                    kserial!("mapping... {:#x} => {:#x}(pde_idx: {pde_idx})\n",
+                        pt_virt_addr.addr(), pt_phys_addr.addr());
+                    origin_pd.insert_mapping(pt_virt_addr, pt_phys_addr,
+                        &mut frame_alloc)?;
+                }
+            }
+            let used_frames_after = frame_alloc.used_frames();
+
+            // If no extra frames were allocated during the mapping process then
+            // break.
+            if used_frames_before == used_frames_after {
+                break;
+            }
+        }
+    }
+    kserial!("done loader data(paging structures) virtual map\n");
+
+    let mut non_empty_count = 0;
+    origin_pd.pd_entries.iter().enumerate().for_each(|(i, pde)| if !pde.is_empty() {
+        non_empty_count += 1;
+    });
+    kserial!("non_empty_count: {non_empty_count}\n");
 
     Ok(origin_pde_begin_addr)
 }
@@ -948,6 +1045,8 @@ pub struct FrameAlloc {
 
 impl FrameAlloc {
     pub unsafe fn new(region: mm::PhysMemRegion) -> Result<FrameAlloc, ()> {
+        assert!(region.mem_type() == mm::PhysMemType::LoaderData);
+
         let page_count = region.page_count();
 
         for i in 0..page_count {
@@ -969,6 +1068,10 @@ impl FrameAlloc {
         };
 
         Ok(fa)
+    }
+
+    pub fn used_frames(&self) -> usize {
+        self.used_frames
     }
 
     pub fn allocate_frame(&mut self) -> Result<PhysAddr, ()> {
@@ -999,6 +1102,7 @@ impl FrameAlloc {
         Ok(next_frame_begin)
     }
 
+    /*
     pub unsafe fn deallocate_frame(&mut self, frame_begin: PhysAddr) -> Result<(), ()> {
         if frame_begin.addr() % (1<<12) != 0 {
             return Err(());
@@ -1022,6 +1126,7 @@ impl FrameAlloc {
 
         Ok(())
     }
+    */
 
     pub unsafe fn destroy(self) {
         drop(self)

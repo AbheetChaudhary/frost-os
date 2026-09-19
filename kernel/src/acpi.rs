@@ -1,13 +1,6 @@
 use core::mem::offset_of;
 
-macro_rules! as_cast {
-    ($e:expr, $src_type:ty => $dst_type:ty) => {{
-        let __t: $src_type = From::from($e);
-        __t as $dst_type
-    }};
-}
-
-use crate::{address, serial, page_tables, cpu, utils, isr, gdt};
+use crate::{address, serial, page_tables, cpu, utils, isr, gdt, as_cast};
 
 use address::{PhysAddr32, PhysAddr64, PhysAddr};
 

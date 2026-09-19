@@ -744,7 +744,7 @@ pub mod phys_ptr {
 /// This method of representing a range can never represent the range that
 /// contains the last address in the address space. One past the last address
 /// will wrap.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct PhysRange {
     /// The start of the address range(inclusive).
     start: PhysAddr,
@@ -894,11 +894,16 @@ impl TryFrom<PhysAddr32> for PhysAddr {
 pub struct VirtAddr(usize);
 
 impl VirtAddr {
-    pub fn new(addr: usize) -> VirtAddr {
+    pub const fn new(addr: usize) -> VirtAddr {
         Self(addr)
     }
 
-    pub fn addr(self) -> usize {
+    pub const fn addr(self) -> usize {
         self.0
+    }
+
+    /// # Panics
+    pub const fn strict_add(self, count: usize) -> VirtAddr {
+        Self::new(self.addr().strict_add(count))
     }
 }

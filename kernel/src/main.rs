@@ -6,6 +6,7 @@
 // #![feature(abi_x86_interrupt)]
 
 #![feature(fn_align)]
+
 #![no_main]
 #![no_std]
 
@@ -170,13 +171,10 @@ pub fn kmain(phys_mem: boot_mem::PhysMem, acpi: AcpiHandover) -> ! {
 
     serial!("kmain: {:p}\n", kmain as *const ());
 
-    debug_dump(&phys_mem);
+    // debug_dump(&phys_mem);
 
     serial!("going to loop...\n");
     serial!("ticks: {}\n", timer::get_current_ticks());
-
-    // serial!("going to do a null dereference, should page fault!\n");
-    // let _: u8 = unsafe { core::ptr::read_volatile(core::ptr::null()) };
 
     serial!("{:#?}\n", acpi);
 
