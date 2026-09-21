@@ -1,4 +1,4 @@
-#![feature(sync_unsafe_cell)]
+#![feature(sync_unsafe_cell, const_trait_impl)]
 #![no_std]
 
 #![warn(raw_borrows_via_references)]

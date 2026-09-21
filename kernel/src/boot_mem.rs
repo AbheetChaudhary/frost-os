@@ -1,3 +1,4 @@
+#[repr(u8)]
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub enum PhysMemType {
     AcpiMemoryNvs,

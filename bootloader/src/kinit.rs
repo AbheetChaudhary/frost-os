@@ -18,6 +18,35 @@ use crate::*;
 
 use mm::{PhysAddr, VirtAddr, PhysAddrRange, PhysMemType, Address};
 
+/// Reserve the part of the virtual address space that will be needed to
+/// represent all the page table mappings.
+///
+/// Currently the memory containing the page tables is LoaderData, later we
+/// will not identity map this memory.
+///
+/// PAGE_TABLE_START virtual address will be mapped to origin_pde_begin_addr
+/// physical address.
+pub const PAGE_TABLE_START: VirtAddr = VirtAddr::new(0xcf000000);
+
+/// The amount of virtual memory space reserved to store the serialized paging
+/// related structures.
+pub const PAGE_TABLE_SIZE: usize = (1 + 1024) << 12;
+
+/// Size of the kernel stack.
+pub const KERNEL_STACK_SIZE: usize = 128 * 1024; // 128KB
+
+/// Unmapped virtual address space memory that will go before and after the
+/// kernel stack and act as trap if accessed.
+pub const KERNEL_STACK_MOAT: usize = KERNEL_STACK_SIZE / 2; // 64KB before and
+                                                            // after the stack.
+
+/// Virtual address at which the kernel stack will begin.
+///
+/// This is where the MOAT-STACK-MOAT region begins.
+///
+/// This is for the BSP processor only.
+pub const KERNEL_STACK_BEGIN: usize = 8 * 1024 * 1024;
+
 pub struct KernelFile {
     /// The pointer to kernel file data.
     data: PhysAddr,
@@ -217,12 +246,64 @@ impl KernelFile {
 
         kserial!("page table initialized, jumping to kernel entry...\n");
 
-        let kernel_entry: unsafe extern "C" fn(*const mm::PhysMem,
-            *const AcpiHandover) -> ! = unsafe { core::mem::transmute(self.entry) };
+        /*
+        let kernel_entry: unsafe extern "cdecl" fn(mm::PhysMem,
+            AcpiHandover) -> ! = unsafe { core::mem::transmute(self.entry) };
+        */
 
+        let stack_top_addr = KERNEL_STACK_BEGIN
+            .strict_add(KERNEL_STACK_MOAT)
+            .strict_add(KERNEL_STACK_SIZE);
+
+        // Prepare stack before jumping to kernel.
+        unsafe {
+            let stack_top: *mut u8 =
+                core::ptr::with_exposed_provenance_mut(stack_top_addr);
+
+            kserial!("stack_top: {:#x}\n", stack_top.addr());
+
+            let handover = stack_top.sub(size_of::<AcpiHandover>());
+            handover.cast::<AcpiHandover>().write_unaligned(acpi_virt);
+
+            let physmem = handover.sub(size_of::<mm::PhysMem>());
+            physmem.cast::<mm::PhysMem>().write_unaligned(phys_mem);
+
+            let kernel_stack_top = stack_top_addr
+                .strict_sub(size_of::<AcpiHandover>())
+                .strict_sub(size_of::<mm::PhysMem>());
+
+            // 16-byte alignment.
+            let kernel_stack_top = kernel_stack_top & !0xf;
+
+            kserial!("stack_top: {:#x}\n", kernel_stack_top);
+
+            asm!(r#"
+                    # 3 NOPs For easy searching in the generated assembly.
+                    nop
+                    nop
+                    nop
+                    mov     esp, {kernel_stack_top}
+                    push    0x00000000                  # Dummy, for alignment
+                    push    {arg_2}
+                    push    {arg_1}
+                    push    0x00000000                  # Dummy return value
+                    jmp     {kernel_entry}
+                "#,
+
+                kernel_stack_top = in(reg) kernel_stack_top as u32,
+                kernel_entry = in(reg) self.entry.addr() as u32,
+                arg_2 = in(reg) handover.addr() as u32,
+                arg_1 = in(reg) physmem.addr() as u32,
+
+                options(noreturn)
+            );
+        }
+
+        /*
         unsafe {
             kernel_entry(&phys_mem, &acpi_virt);
         }
+        */
     }
 }
 
@@ -766,22 +847,12 @@ pub fn create_virtual_address_map(phys_mem: &mut mm::PhysMem, kernel_file: &Kern
         origin_pde_begin_addr.as_mut::<PageDirectory>()
     };
 
-    // Reserve the part of the virtual address space that will be needed to
-    // represent all the page table mappings.
-    //
-    // Currently the memory containing the page tables is LoaderData, later we
-    // will not identity map this memory.
-    //
-    // PAGE_TABLE_START virtual address will be mapped to origin_pde_begin_addr
-    // physical address.
-    const PAGE_TABLE_START: VirtAddr = VirtAddr::new(32 * 0x100000);
-
     // Virtual address at which we will start mapping things.
     //
     // Large enough that no identity maps of loader code/data will conflict with
     // other mappings.
     // const virt_start: usize = 32 * 0x100000; // 32MiB
-    let virt_start: usize = PAGE_TABLE_START.addr().strict_add(1025 * 4096);
+    let virt_start: usize = PAGE_TABLE_START.addr().strict_add(8 * 1024 * 1024);
 
     let mut virt = VirtAddr::new(virt_start);
 
@@ -854,11 +925,54 @@ pub fn create_virtual_address_map(phys_mem: &mut mm::PhysMem, kernel_file: &Kern
     kserial!("done loader data(paging structures) virtual map\n");
     */
 
-    identity_map_region(&phys_mem, origin_pd, PhysMemType::BootServicesCode,
-        &mut frame_alloc).unwrap();
+    // We should not need boot services data. But we would need one boot
+    // services data region that potentially contains our current stack to be
+    // identity mapped.
+
+    // identity_map_region(&phys_mem, origin_pd, PhysMemType::BootServicesCode,
+    //     &mut frame_alloc).unwrap();
+
+    let stack_variable: usize = 0xcafef00d;
+    core::hint::black_box(&stack_variable);
+
+    // Address of something on stack.
+    let stack_addr: *const usize = core::ptr::from_ref(&stack_variable);
+
+    let stack_addr: PhysAddr = PhysAddr::new(stack_addr.addr());
+
+    let mut found_uefi_stack = false;
+    for region in phys_mem.active_regions() {
+        if region.mem_type() == mm::PhysMemType::BootServicesData {
+            // If region does not contains stack_addr then it is not our stack.
+            if !region.contains(stack_addr) {
+                continue;
+            }
+
+            // Identity map this region as this is our stack.
+            //
+            // This is assuming that all our usage of the stack before jumping
+            // to kernel will not need a bigger region than this.
+            for page_idx in 0..region.page_count() {
+                let addr = region.first().strict_add(page_idx.strict_mul(1<<12));
+                let virt = VirtAddr::new(addr.addr());
+
+                unsafe { origin_pd.insert_mapping(virt, addr, &mut frame_alloc)?; }
+            }
+
+            kserial!("Identity mapped bootloader stack. {:#x} -> {:#x}\n",
+                region.first_addr(), region.last_addr());
+            found_uefi_stack = true;
+            break;
+        }
+    }
+
+    assert!(found_uefi_stack, "Could not find bootloader stack to identity map!");
+
+    /*
     identity_map_region(&phys_mem, origin_pd, PhysMemType::BootServicesData,
         &mut frame_alloc).unwrap();
     kserial!("done boot services code/data virtual map\n");
+    */
 
     // Inspect loader code.
     /*
@@ -901,7 +1015,27 @@ pub fn create_virtual_address_map(phys_mem: &mut mm::PhysMem, kernel_file: &Kern
     map_region(&phys_mem, origin_pd, k_rodata_virt, PhysMemType::KernelRodata, 
         &mut frame_alloc)?;
 
-    // TODO: map kernel stack.
+    // Region from which kernel stack frames will be taken.
+    let kernel_stack_region = phys_mem.allocate_region(KERNEL_STACK_SIZE >> 12,
+        PhysMemType::KernelStack)?;
+
+    // Frame allocator for kernel stack frames.
+    let mut frame_alloc_stack = unsafe {
+        FrameAlloc::new(kernel_stack_region).map_err(|_| PagingError::FrameAllocError)?
+    };
+
+    // Map the entire kernel stack.
+    for stack_frame_idx in 0..(KERNEL_STACK_SIZE >> 12) {
+        let virt = VirtAddr::new(KERNEL_STACK_BEGIN)
+            .strict_add(KERNEL_STACK_MOAT)
+            .strict_add(stack_frame_idx.strict_mul(1 << 12));
+
+        let phys = frame_alloc_stack.allocate_frame()
+                .map_err(|_| PagingError::FrameAllocError)?;
+
+        kserial!("mapping stack: {:#x} -> {:#x}\n", virt.addr(), phys.addr());
+        unsafe { origin_pd.insert_mapping(virt, phys, &mut frame_alloc)?; }
+    }
 
     // Map the APIC base at virtual address `apic_base`. It is assumed that the
     // physical address of the apic base is 0xfee00000.
@@ -953,12 +1087,6 @@ pub fn create_virtual_address_map(phys_mem: &mut mm::PhysMem, kernel_file: &Kern
         }
     }
     kserial!("done loader data(paging structures) virtual map\n");
-
-    let mut non_empty_count = 0;
-    origin_pd.pd_entries.iter().enumerate().for_each(|(i, pde)| if !pde.is_empty() {
-        non_empty_count += 1;
-    });
-    kserial!("non_empty_count: {non_empty_count}\n");
 
     Ok(origin_pde_begin_addr)
 }
@@ -1045,7 +1173,8 @@ pub struct FrameAlloc {
 
 impl FrameAlloc {
     pub unsafe fn new(region: mm::PhysMemRegion) -> Result<FrameAlloc, ()> {
-        assert!(region.mem_type() == mm::PhysMemType::LoaderData);
+        assert!(region.mem_type() == mm::PhysMemType::LoaderData ||
+            region.mem_type() == mm::PhysMemType::KernelStack);
 
         let page_count = region.page_count();
 

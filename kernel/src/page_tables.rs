@@ -7,7 +7,7 @@ use mm::{FrameAllocator};
 /// structures will exist.
 ///
 /// CR3 contains a physical address 
-pub const PAGE_TABLE_START: VirtAddr = VirtAddr::new(32 * 0x100000);
+pub const PAGE_TABLE_START: VirtAddr = VirtAddr::new(0xcf000000);
 
 #[derive(Copy, Clone)]
 #[repr(transparent)]

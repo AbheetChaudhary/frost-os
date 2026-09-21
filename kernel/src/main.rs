@@ -68,6 +68,7 @@ fn blessed_machine() {
     serial!("machine spirit is appeased...\n");
 }
 
+#[repr(C)]
 #[derive(Debug)]
 pub struct AcpiHandover {
     xsdt: usize,
@@ -76,27 +77,15 @@ pub struct AcpiHandover {
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn kernel_entry(phys_mem: *const boot_mem::PhysMem, 
+pub unsafe extern "cdecl" fn kernel_entry(phys_mem: *const boot_mem::PhysMem, 
     acpi: *const AcpiHandover) -> ! {
-
-    /*
-    core::hint::black_box(&raw mut FOO);
-
-    unsafe { 
-        serial::SerialPort::init();
-    }
-
-    serial!("this is the kernel speaking...!\n");
-
-    loop {}
-    */
 
     unsafe {
         cpu::disable_interrupts(); 
     }
 
-    let phys_mem = unsafe { phys_mem.read() };
-    let acpi = unsafe { acpi.read() };
+    let phys_mem = unsafe { phys_mem.read_unaligned() };
+    let acpi = unsafe { acpi.read_unaligned() };
 
     kmain(phys_mem, acpi);
 }
@@ -130,11 +119,9 @@ pub fn kmain(phys_mem: boot_mem::PhysMem, acpi: AcpiHandover) -> ! {
         serial::SerialPort::init();
     }
 
-    gdt.gdt_install();
-
     serial!("\n\n");
     serial!("################################################################\n");
-    serial!("################            RESET            ###################\n");
+    serial!("################            KMAIN            ###################\n");
     serial!("################################################################\n");
     serial!("\n");
 
@@ -173,7 +160,6 @@ pub fn kmain(phys_mem: boot_mem::PhysMem, acpi: AcpiHandover) -> ! {
 
     // debug_dump(&phys_mem);
 
-    serial!("going to loop...\n");
     serial!("ticks: {}\n", timer::get_current_ticks());
 
     serial!("{:#?}\n", acpi);
@@ -190,9 +176,10 @@ pub fn kmain(phys_mem: boot_mem::PhysMem, acpi: AcpiHandover) -> ! {
 
     // serial!("trampoline address: {:#x}\n", kinit::sipi_trampoline as usize);
 
-    let madt_ptr = core::ptr::with_exposed_provenance(acpi.apic);
+    // let madt_ptr = core::ptr::with_exposed_provenance(acpi.apic);
+    // kinit::mp_init(madt_ptr);
 
-    kinit::mp_init(madt_ptr);
+    kinit::bsp_init(&phys_mem);
 
     loop {}
 }

@@ -1,7 +1,46 @@
 use core::arch::asm;
 
-use crate::{address, acpi, serial, page_tables, cpu, utils, isr, gdt};
+use crate::{address, acpi, serial, page_tables, boot_mem, cpu, utils, isr, gdt};
 use address::{PhysAddr32, PhysAddr64, PhysAddr};
+use boot_mem as bmm;
+
+fn is_reclaimable_memory(mem_type: bmm::PhysMemType) -> bool {
+    use bmm::PhysMemType::*;
+
+    mem_type == UnusedMemory ||
+        mem_type == BootServicesCode || 
+        mem_type == BootServicesData ||
+        mem_type == LoaderCode
+}
+
+pub fn bsp_init(phys_mem: &bmm::PhysMem) -> ! {
+    // Number of cores to boot.
+    let core_count: usize = 4;
+
+    // Number of unused pages of memory.
+    let mut unused_memory_pages: usize = 0;
+
+    phys_mem.active_regions().for_each(|r| {
+        if is_reclaimable_memory(r.mem_type()) {
+            unused_memory_pages += r.page_count();
+        }
+    });
+
+    let total_usable_pages: usize = unused_memory_pages;
+    serial!("total usable memory pages: {:#x}\n", total_usable_pages);
+
+    // Total stack memory for all cores.
+    let total_stack_pages: usize = core_count * (128 * 1024) / (1<<12);
+    serial!("total stack pages: {:#x}\n", total_stack_pages);
+
+    let total_heap_pages = total_usable_pages - total_stack_pages;
+    serial!("usable heap pages: {:#x}\n", total_heap_pages);
+
+    let per_core_heap_pages = total_heap_pages / core_count;
+    serial!("per core heap pages: {per_core_heap_pages:#x}\n");
+
+    loop {}
+}
 
 pub fn mp_init(madt_ptr: *const acpi::RawMadt) {
     /*

@@ -1,3 +1,4 @@
+#[repr(u8)]
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub enum PhysMemType {
     AcpiMemoryNvs,
@@ -47,7 +48,7 @@ impl PhysMemType {
 /// A trait for addresses.
 ///
 /// `Self::from(self.addr()) == self` must be always true.
-pub trait Address: Copy {
+pub const trait Address: Copy {
     /// Address represented by the `Self` type interpreted as a `usize`.
     fn addr(self) -> usize;
 
@@ -191,7 +192,7 @@ impl PhysAddr {
     }
 }
 
-impl Address for PhysAddr {
+const impl Address for PhysAddr {
     fn addr(self) -> usize {
         self.0
     }
@@ -785,7 +786,7 @@ impl VirtAddr {
     }
 }
 
-impl Address for VirtAddr {
+const impl Address for VirtAddr {
     fn addr(self) -> usize {
         self.0
     }
