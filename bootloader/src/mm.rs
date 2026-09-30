@@ -17,6 +17,9 @@ pub enum PhysMemType {
     LoaderData,
     LoaderStack,
 
+    /// Memory being used to store paging structures.
+    PagingData,
+
     KernelCode,
     KernelStack,
     KernelData,
@@ -407,6 +410,10 @@ impl PhysMemRegion {
         };
 
         Ok(r)
+    }
+
+    pub unsafe fn set_mem_type(&mut self, mem_type: PhysMemType) {
+        self.mem_type = mem_type;
     }
 
     pub fn mem_type(&self) -> PhysMemType {

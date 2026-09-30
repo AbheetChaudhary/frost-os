@@ -805,21 +805,22 @@ pub fn create_virtual_address_map(phys_mem: &mut mm::PhysMem, kernel_file: &Kern
     // Memory regions of type:
     // - LoaderCode
     // - LoaderData
-    // - BootServicesCode
-    // - BootServicesData
+    // - BootServicesData (only the region that contains bootloader stack)
     // ...will get identity mapped.
     //
     // Memory regions of type:
     // - KernelCode
     // - KernelData
     // - KernelRodata
-    // ...will get virtual addresses from `kernel`.
+    // ...will get virtual addresses from `kernel_file`.
+    //
+    // KernelStack will get mapped as per KERNEL_STACK_BEGIN calculations above.
     //
     // BiosRegion and ReservedMemoryType will not get any virtual mapping.
 
     // A region to hold the page directory and the page tables.
     let page_table_region = phys_mem.allocate_region(1 + 1024,
-        PhysMemType::LoaderData)?;
+        PhysMemType::PagingData)?;
 
     // A frame allocator that will hand over page frames to create the page
     // tables.
@@ -872,18 +873,15 @@ pub fn create_virtual_address_map(phys_mem: &mut mm::PhysMem, kernel_file: &Kern
 
     kserial!("done runtime services virtual map\n");
 
-    // Identity map loader code and data.
-    identity_map_region(&phys_mem, origin_pd, PhysMemType::LoaderCode,
-        &mut frame_alloc)?;
-    /*
-    identity_map_region(&phys_mem, origin_pd, PhysMemType::LoaderData,
-        &mut frame_alloc)?;
-    */
+    // Identity map loader code.
+    // identity_map_region(&phys_mem, origin_pd, PhysMemType::LoaderCode,
+    //     &mut frame_alloc)?;
 
     // Identity map loader data, except the physical region that contain the
     // page table.
     for region in phys_mem.active_regions() {
-        if region.mem_type() == mm::PhysMemType::LoaderData {
+        let mt = region.mem_type();
+        if mt == mm::PhysMemType::LoaderData || mt == mm::PhysMemType::LoaderCode {
             // Do not identity map the pages that contain the page table
             // structures.
             if region.first() == page_table_region.first() {
@@ -894,7 +892,9 @@ pub fn create_virtual_address_map(phys_mem: &mut mm::PhysMem, kernel_file: &Kern
 
             let mut virt = region_begin.as_virt_addr();
 
+
             for _ in 0..region.page_count() {
+                kserial!("loader code/data identity map: {:#x}\n", virt.addr());
                 unsafe {
                     origin_pd.insert_mapping(virt, virt.as_phys_addr(),
                         &mut frame_alloc)?; 
@@ -941,12 +941,14 @@ pub fn create_virtual_address_map(phys_mem: &mut mm::PhysMem, kernel_file: &Kern
     let stack_addr: PhysAddr = PhysAddr::new(stack_addr.addr());
 
     let mut found_uefi_stack = false;
-    for region in phys_mem.active_regions() {
+    for region in phys_mem.active_regions_mut() {
         if region.mem_type() == mm::PhysMemType::BootServicesData {
             // If region does not contains stack_addr then it is not our stack.
             if !region.contains(stack_addr) {
                 continue;
             }
+
+            unsafe { region.set_mem_type(mm::PhysMemType::LoaderStack) };
 
             // Identity map this region as this is our stack.
             //
@@ -1030,10 +1032,19 @@ pub fn create_virtual_address_map(phys_mem: &mut mm::PhysMem, kernel_file: &Kern
             .strict_add(KERNEL_STACK_MOAT)
             .strict_add(stack_frame_idx.strict_mul(1 << 12));
 
+        // NOTE: This could fail!
+        //
+        // Currently all the pages in the stack region are being mapped to
+        // stack, but this region is also supplying the frames used to hold the
+        // page tables if a new one is needed during mapping of the stack page.
+        //
+        // This could fail if we ever need 
         let phys = frame_alloc_stack.allocate_frame()
                 .map_err(|_| PagingError::FrameAllocError)?;
 
         kserial!("mapping stack: {:#x} -> {:#x}\n", virt.addr(), phys.addr());
+
+        // NOTE: This could fail! for the same reason as above.
         unsafe { origin_pd.insert_mapping(virt, phys, &mut frame_alloc)?; }
     }
 
@@ -1173,7 +1184,7 @@ pub struct FrameAlloc {
 
 impl FrameAlloc {
     pub unsafe fn new(region: mm::PhysMemRegion) -> Result<FrameAlloc, ()> {
-        assert!(region.mem_type() == mm::PhysMemType::LoaderData ||
+        assert!(region.mem_type() == mm::PhysMemType::PagingData ||
             region.mem_type() == mm::PhysMemType::KernelStack);
 
         let page_count = region.page_count();

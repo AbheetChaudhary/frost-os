@@ -5,12 +5,12 @@
 //
 // #![feature(abi_x86_interrupt)]
 
-#![feature(fn_align)]
+#![feature(fn_align, thread_local, allocator_ext)]
 
-#![no_main]
 #![no_std]
+#![no_main]
 
-use core::arch::asm;
+extern crate alloc;
 
 pub mod vga_buffer;
 pub mod utils;
@@ -27,11 +27,42 @@ pub mod mm;
 pub mod acpi;
 pub mod page_tables;
 pub mod kinit;
+pub mod kmalloc;
+pub mod kmain;
 
 mod prelude;
 
 use vga_buffer::WRITER;
 use prelude::*;
+
+struct FakeAllocator;
+
+/// #[global_allocator] is needed if linking with `alloc`. But we can't have a
+/// global allocator yet.
+///
+/// Taken from [Link against `alloc` without global allocator]
+/// (https://github.com/rust-lang/wg-allocators/issues/123#issuecomment-1982120619)
+///
+/// If any code tries to use global allocator then compilation will fail due to
+/// undefined symbols. If nothing ever invokes the global allocator then this
+/// will all be optimized out and deleted.
+unsafe impl core::alloc::GlobalAlloc for FakeAllocator {
+    unsafe fn alloc(&self, layout: core::alloc::Layout) -> *mut u8 {
+        unsafe extern "Rust" {
+            fn fake_alloc_this_doesnt_exist(layout: core::alloc::Layout) -> *mut u8;
+        }
+        unsafe { fake_alloc_this_doesnt_exist(layout) }
+    }
+    unsafe fn dealloc(&self, ptr: *mut u8, layout: core::alloc::Layout) {
+        unsafe extern "Rust" {
+            fn fake_dealloc_this_doesnt_exist(ptr: *mut u8, layout: core::alloc::Layout);
+        }
+        unsafe { fake_dealloc_this_doesnt_exist(ptr, layout) }
+    }
+}
+
+#[global_allocator]
+static _ALLOCATOR: FakeAllocator = FakeAllocator;
 
 #[panic_handler]
 fn panic_handler(info: &core::panic::PanicInfo) -> ! {
@@ -43,24 +74,7 @@ fn panic_handler(info: &core::panic::PanicInfo) -> ! {
 
     serial!("{}\n", info.message());
 
-    halt_loop();
-}
-
-/// Halt the system.
-pub fn halt_loop() -> ! {
-    use core::arch::asm;
-
-    unsafe {
-        asm!(r#"
-            2:
-                cli
-                hlt
-                jmp 2b
-            "#,
-
-            options(noreturn),
-        )
-    }
+    cpu::halt();
 }
 
 #[allow(unused)]
@@ -87,7 +101,7 @@ pub unsafe extern "cdecl" fn kernel_entry(phys_mem: *const boot_mem::PhysMem,
     let phys_mem = unsafe { phys_mem.read_unaligned() };
     let acpi = unsafe { acpi.read_unaligned() };
 
-    kmain(phys_mem, acpi);
+    bootstrap(phys_mem, acpi);
 }
 
 pub fn debug_dump(phys_mem: &boot_mem::PhysMem) {
@@ -102,8 +116,7 @@ pub fn debug_dump(phys_mem: &boot_mem::PhysMem) {
     serial!("---------------------------------------------------\n");
 }
 
-#[unsafe(no_mangle)]
-pub fn kmain(phys_mem: boot_mem::PhysMem, acpi: AcpiHandover) -> ! {
+pub fn bootstrap(phys_mem: boot_mem::PhysMem, acpi: AcpiHandover) -> ! {
     // Disable interrupts and install GDTR.
     unsafe { cpu::disable_interrupts(); }
 
@@ -121,7 +134,7 @@ pub fn kmain(phys_mem: boot_mem::PhysMem, acpi: AcpiHandover) -> ! {
 
     serial!("\n\n");
     serial!("################################################################\n");
-    serial!("################            KMAIN            ###################\n");
+    serial!("################            FROST            ###################\n");
     serial!("################################################################\n");
     serial!("\n");
 
@@ -156,8 +169,6 @@ pub fn kmain(phys_mem: boot_mem::PhysMem, acpi: AcpiHandover) -> ! {
 
     serial!("hello, world from Serial\n");
 
-    serial!("kmain: {:p}\n", kmain as *const ());
-
     // debug_dump(&phys_mem);
 
     serial!("ticks: {}\n", timer::get_current_ticks());
@@ -177,9 +188,9 @@ pub fn kmain(phys_mem: boot_mem::PhysMem, acpi: AcpiHandover) -> ! {
     // serial!("trampoline address: {:#x}\n", kinit::sipi_trampoline as usize);
 
     // let madt_ptr = core::ptr::with_exposed_provenance(acpi.apic);
-    // kinit::mp_init(madt_ptr);
+    // kinit::mp_init(/* madt_ptr */);
 
-    kinit::bsp_init(&phys_mem);
+    kinit::init_all_cores(phys_mem);
 
     loop {}
 }

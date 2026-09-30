@@ -17,6 +17,9 @@ pub enum PhysMemType {
     LoaderData,
     LoaderStack,
 
+    /// Memory being used to store paging structures.
+    PagingData,
+
     KernelCode,
     KernelStack,
     KernelData,
@@ -373,7 +376,7 @@ impl PhysAddrRange {
 #[derive(Clone, Copy, PartialEq, Eq)]
 #[repr(C)]
 pub struct PhysMemRegion {
-    mem_type: PhysMemType,
+    pub mem_type: PhysMemType,
 
     /// Address range associated with the memory region. It begins at a page
     /// boundary and the end is rounded up to the next available page boundary.
@@ -407,6 +410,10 @@ impl PhysMemRegion {
         };
 
         Ok(r)
+    }
+
+    pub unsafe fn set_mem_type(&mut self, mem_type: PhysMemType) {
+        self.mem_type = mem_type;
     }
 
     pub fn mem_type(&self) -> PhysMemType {
@@ -457,6 +464,30 @@ impl PhysMemRegion {
         size / (1<<12)
     }
 
+
+    /// Returns `None` if taking will leave the region empty. Empty regions are
+    /// not allowed.
+    pub fn take_from_beginning(&mut self, page_count: usize)
+        -> Option<PhysMemRegion>
+    {
+        if page_count >= self.page_count() {
+            return None;
+        }
+
+        let to_take = PhysAddrRange::new(self.first(),
+            self.first().strict_add(page_count.strict_mul(1<<12)).strict_sub(1))
+            .expect("last is strictly less than first");
+
+        let addr_range = self.addr_range.take_from_beginning(to_take)
+            .expect("we checked that we are not taking the entire range");
+
+        Some(Self {
+            mem_type: self.mem_type,
+            addr_range,
+        })
+    }
+
+
     /// Checks whether this physical memory region is the all encompassing
     /// region which contains all physical addresses that are possible within a
     /// `usize`.
@@ -476,7 +507,7 @@ const MAX_REGION_COUNT: usize = (1 << 12) / size_of::<Option<PhysMemRegion>>();
 
 #[repr(C, align(4096))]
 pub struct PhysMem {
-    regions: [Option<PhysMemRegion>; MAX_REGION_COUNT],
+    pub regions: [Option<PhysMemRegion>; MAX_REGION_COUNT],
     active_region_count: usize,
 }
 

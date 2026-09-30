@@ -801,6 +801,14 @@ impl PhysRange {
         self.last
     }
 
+    pub fn start_addr(&self) -> usize {
+        self.start.addr()
+    }
+
+    pub fn last_addr(&self) -> usize {
+        self.last.addr()
+    }
+
     pub fn contains(&self, addr: &PhysAddr) -> bool {
         *addr >= self.start && *addr <= self.last
     }
@@ -905,5 +913,42 @@ impl VirtAddr {
     /// # Panics
     pub const fn strict_add(self, count: usize) -> VirtAddr {
         Self::new(self.addr().strict_add(count))
+    }
+
+    pub const fn strict_sub(self, count: usize) -> VirtAddr {
+        Self::new(self.addr().strict_sub(count))
+    }
+
+    /// Checks whether the address is aligned to `align`. Returns `true` if
+    /// it is aligned otherwise return `false`.
+    ///
+    /// # Panics
+    ///
+    /// The function panics if `align` is not a power-of-two.
+    pub const fn is_aligned_to(self, align: usize) -> bool {
+        if !align.is_power_of_two() {
+            panic!("is_aligned_to: align is not a power-of-two");
+        }
+
+        (self.addr() & (align - 1)) == 0
+    }
+
+    pub fn map_addr<F>(self, f: F) -> VirtAddr
+    where
+        F: FnOnce(usize) -> usize
+    {
+        Self::new(f(self.addr()))
+    }
+
+    pub const fn as_ptr<T>(self) -> *const T {
+        let ptr: *const u8 = core::ptr::with_exposed_provenance(self.addr());
+
+        ptr.cast()
+    }
+
+    pub const fn as_mut<T>(self) -> *mut T {
+        let ptr: *mut u8 = core::ptr::with_exposed_provenance_mut(self.addr());
+
+        ptr.cast()
     }
 }

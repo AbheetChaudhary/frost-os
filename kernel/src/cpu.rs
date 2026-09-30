@@ -173,3 +173,26 @@ pub unsafe fn rdmsr(msr: u32) -> u64 {
 
     (hi << 32) | lo
 }
+
+/// Halt the system.
+pub fn halt() -> ! {
+    use core::arch::asm;
+
+    unsafe {
+        asm!(r#"
+            2:
+                cli
+                hlt
+                jmp 2b
+            "#,
+
+            options(noreturn),
+        )
+    }
+}
+
+pub fn forever_spin() -> ! {
+    loop {
+        core::hint::spin_loop();
+    }
+}
