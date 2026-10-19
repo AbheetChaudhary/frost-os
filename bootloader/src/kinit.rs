@@ -260,8 +260,6 @@ impl KernelFile {
             let stack_top: *mut u8 =
                 core::ptr::with_exposed_provenance_mut(stack_top_addr);
 
-            kserial!("stack_top: {:#x}\n", stack_top.addr());
-
             let handover = stack_top.sub(size_of::<AcpiHandover>());
             handover.cast::<AcpiHandover>().write_unaligned(acpi_virt);
 
@@ -275,7 +273,7 @@ impl KernelFile {
             // 16-byte alignment.
             let kernel_stack_top = kernel_stack_top & !0xf;
 
-            kserial!("stack_top: {:#x}\n", kernel_stack_top);
+            // kserial!("stack_top: {:#x}\n", kernel_stack_top);
 
             asm!(r#"
                     # 3 NOPs For easy searching in the generated assembly.
@@ -769,10 +767,7 @@ fn inspect_region(pd: &PageDirectory, region: &mm::PhysMemRegion) {
 unsafe fn enable_32bit_paging(cr3: usize) {
     // CR4.PSE = 0, PDE PS flag = 0
 
-    let x: usize = 0;
-    kserial!("stack contains address: {:p}\n", &x);
-
-    kserial!("Setting CR3 to {:#x}\n", cr3);
+    kserial!("setting CR3 to {:#x}\n", cr3);
     // Set cr3 and enable PG and PE bits of cr0.
     unsafe {
         asm!(r#"
@@ -863,7 +858,7 @@ pub fn create_virtual_address_map(phys_mem: &mut mm::PhysMem, kernel_file: &Kern
     virt = map_region(&phys_mem, origin_pd, virt, 
         PhysMemType::AcpiReclaimMemory, &mut frame_alloc)?;
 
-    kserial!("done acpi virtual map\n");
+    kserial!("mapped ACPIMemoryNVS and ACPIReclaimMemory\n");
 
     // Virtual map runtime services code and data.
     virt = map_region(&phys_mem, origin_pd, virt,
@@ -871,14 +866,10 @@ pub fn create_virtual_address_map(phys_mem: &mut mm::PhysMem, kernel_file: &Kern
     map_region(&phys_mem, origin_pd, virt,
         PhysMemType::RuntimeServicesData, &mut frame_alloc)?;
 
-    kserial!("done runtime services virtual map\n");
+    kserial!("mapped runtime services code and data\n");
 
-    // Identity map loader code.
-    // identity_map_region(&phys_mem, origin_pd, PhysMemType::LoaderCode,
-    //     &mut frame_alloc)?;
-
-    // Identity map loader data, except the physical region that contain the
-    // page table.
+    // Identity map loader data and data, except the physical region that
+    // contain the provides the frames for page tables.
     for region in phys_mem.active_regions() {
         let mt = region.mem_type();
         if mt == mm::PhysMemType::LoaderData || mt == mm::PhysMemType::LoaderCode {
@@ -894,7 +885,7 @@ pub fn create_virtual_address_map(phys_mem: &mut mm::PhysMem, kernel_file: &Kern
 
 
             for _ in 0..region.page_count() {
-                kserial!("loader code/data identity map: {:#x}\n", virt.addr());
+                // kserial!("loader code/data identity map: {:#x}\n", virt.addr());
                 unsafe {
                     origin_pd.insert_mapping(virt, virt.as_phys_addr(),
                         &mut frame_alloc)?; 
@@ -905,7 +896,7 @@ pub fn create_virtual_address_map(phys_mem: &mut mm::PhysMem, kernel_file: &Kern
             }
         }
     }
-    kserial!("done loader code/data(non-paging structures) virtual map\n");
+    kserial!("mapped loader code/data(non-paging structures)\n");
 
     // Map the entire region that contains page table structures, all 1025
     // pages, to PAGE_TABLE_START.
@@ -924,13 +915,6 @@ pub fn create_virtual_address_map(phys_mem: &mut mm::PhysMem, kernel_file: &Kern
     }
     kserial!("done loader data(paging structures) virtual map\n");
     */
-
-    // We should not need boot services data. But we would need one boot
-    // services data region that potentially contains our current stack to be
-    // identity mapped.
-
-    // identity_map_region(&phys_mem, origin_pd, PhysMemType::BootServicesCode,
-    //     &mut frame_alloc).unwrap();
 
     let stack_variable: usize = 0xcafef00d;
     core::hint::black_box(&stack_variable);
@@ -961,7 +945,7 @@ pub fn create_virtual_address_map(phys_mem: &mut mm::PhysMem, kernel_file: &Kern
                 unsafe { origin_pd.insert_mapping(virt, addr, &mut frame_alloc)?; }
             }
 
-            kserial!("Identity mapped bootloader stack. {:#x} -> {:#x}\n",
+            kserial!("identity mapped bootloader stack. {:#x} -> {:#x}\n",
                 region.first_addr(), region.last_addr());
             found_uefi_stack = true;
             break;
@@ -969,12 +953,6 @@ pub fn create_virtual_address_map(phys_mem: &mut mm::PhysMem, kernel_file: &Kern
     }
 
     assert!(found_uefi_stack, "Could not find bootloader stack to identity map!");
-
-    /*
-    identity_map_region(&phys_mem, origin_pd, PhysMemType::BootServicesData,
-        &mut frame_alloc).unwrap();
-    kserial!("done boot services code/data virtual map\n");
-    */
 
     // Inspect loader code.
     /*
@@ -999,21 +977,21 @@ pub fn create_virtual_address_map(phys_mem: &mut mm::PhysMem, kernel_file: &Kern
     // Map kernel code.
     let k_code_virt = kernel_file.exec.virt_addr;
     let k_code_virt = VirtAddr::new(k_code_virt.addr() & !((1<<12) - 1));
-    kserial!("exec page: {:#x}\n", k_code_virt.addr());
+    kserial!("mapping kernel code pages at: {:#x}\n", k_code_virt.addr());
     map_region(&phys_mem, origin_pd, k_code_virt, PhysMemType::KernelCode, 
         &mut frame_alloc)?;
 
     // Map kernel r/w data.
     let k_rw_virt = kernel_file.read_write.virt_addr;
     let k_rw_virt = VirtAddr::new(k_rw_virt.addr() & !((1<<12) - 1));
-    kserial!("rw page: {:#x}\n", k_rw_virt.addr());
+    kserial!("mapping kernel read/write pages at: {:#x}\n", k_rw_virt.addr());
     map_region(&phys_mem, origin_pd, k_rw_virt, PhysMemType::KernelData, 
         &mut frame_alloc)?;
 
     // Map kernel rodata.
     let k_rodata_virt = kernel_file.rdonly.virt_addr;
     let k_rodata_virt = VirtAddr::new(k_rodata_virt.addr() & !((1<<12) - 1));
-    kserial!("rodata page: {:#x}\n", k_rodata_virt.addr());
+    kserial!("mapping kernel readonly pages at: {:#x}\n", k_rodata_virt.addr());
     map_region(&phys_mem, origin_pd, k_rodata_virt, PhysMemType::KernelRodata, 
         &mut frame_alloc)?;
 
@@ -1042,7 +1020,7 @@ pub fn create_virtual_address_map(phys_mem: &mut mm::PhysMem, kernel_file: &Kern
         let phys = frame_alloc_stack.allocate_frame()
                 .map_err(|_| PagingError::FrameAllocError)?;
 
-        kserial!("mapping stack: {:#x} -> {:#x}\n", virt.addr(), phys.addr());
+        // kserial!("mapping stack: {:#x} -> {:#x}\n", virt.addr(), phys.addr());
 
         // NOTE: This could fail! for the same reason as above.
         unsafe { origin_pd.insert_mapping(virt, phys, &mut frame_alloc)?; }
@@ -1068,8 +1046,9 @@ pub fn create_virtual_address_map(phys_mem: &mut mm::PhysMem, kernel_file: &Kern
     }
 
     unsafe {
-        kserial!("mapping... {:#x} => {:#x}\n",
-            PAGE_TABLE_START.addr(), origin_pde_begin_addr.addr());
+        // kserial!("mapping... {:#x} => {:#x}\n",
+            // PAGE_TABLE_START.addr(), origin_pde_begin_addr.addr());
+
         origin_pd.insert_mapping(PAGE_TABLE_START, origin_pde_begin_addr, 
             &mut frame_alloc)?;
 
@@ -1082,8 +1061,9 @@ pub fn create_virtual_address_map(phys_mem: &mut mm::PhysMem, kernel_file: &Kern
                     let pt_virt_addr = PAGE_TABLE_START
                         .strict_add((1 + pde_idx) << 12);
 
-                    kserial!("mapping... {:#x} => {:#x}(pde_idx: {pde_idx})\n",
-                        pt_virt_addr.addr(), pt_phys_addr.addr());
+                    // kserial!("mapping... {:#x} => {:#x}(pde_idx: {pde_idx})\n",
+                        // pt_virt_addr.addr(), pt_phys_addr.addr());
+
                     origin_pd.insert_mapping(pt_virt_addr, pt_phys_addr,
                         &mut frame_alloc)?;
                 }
@@ -1097,39 +1077,9 @@ pub fn create_virtual_address_map(phys_mem: &mut mm::PhysMem, kernel_file: &Kern
             }
         }
     }
-    kserial!("done loader data(paging structures) virtual map\n");
+    kserial!("mapped loader data(paging structures)\n");
 
     Ok(origin_pde_begin_addr)
-}
-
-fn identity_map_region(
-    phys_mem: &mm::PhysMem,
-    pd: &mut PageDirectory,
-    mem_type: PhysMemType,
-    frame_alloc: &mut FrameAlloc,
-) -> Result<(), PagingError> {
-
-    for region in phys_mem.active_regions() {
-        // If region is of our concerned type then map it page by page.
-        if region.mem_type() == mem_type {
-            let region_begin = region.first();
-
-            let mut virt = region_begin.as_virt_addr();
-
-            for _ in 0..region.page_count() {
-                unsafe {
-                    pd.insert_mapping(virt, virt.as_phys_addr(), frame_alloc)?; 
-                }
-
-                // inspect(pd, virt);
-
-                virt = virt.checked_add(1<<12)
-                    .ok_or(PagingError::IntegerOverflow)?;
-            }
-        }
-    }
-
-    Ok(())
 }
 
 fn map_region(

@@ -1,21 +1,6 @@
-use core::{
-    alloc::{
-        Allocator,
-        AllocError,
-        Layout,
-    },
-    cell::UnsafeCell,
-    mem::MaybeUninit,
-    ptr::NonNull,
-    sync::atomic::{
-        AtomicPtr,
-        Ordering
-    },
-};
-
 use crate::{address, page_tables};
 
-use address::{PhysAddr, PhysRange, VirtAddr};
+use address::{PhysAddr, PhysRange};
 use page_tables::PagingError;
 
 pub trait FrameAllocator {
@@ -238,41 +223,3 @@ impl FrameInfo {
         self.0 &= !FRAME_INFO_USED;
     }
 }
-
-pub struct LightFrameAlloc<'a> {
-    /// Status of all the frames that this light allocator has dominion over.
-    frames: &'a mut [FrameInfo],
-
-    /// The index of the first 4K frame.
-    begin_frame_idx: usize,
-}
-
-impl<'a> FrameAllocator for LightFrameAlloc<'a> {
-    fn allocate_frame(&mut self) -> Result<PhysAddr, PagingError> {
-        // Index of a free frame.
-        let free_idx = self.frames
-            .iter()
-            .position(|f| f.is_usable() && !f.is_being_used())
-            .ok_or(PagingError::FrameAllocError)?;
-
-        self.frames[free_idx].set_used();
-
-        let frame_addr = (self.begin_frame_idx + free_idx).strict_mul(1<<12);
-
-        Ok(PhysAddr::new(frame_addr))
-    }
-}
-
-pub struct FrameAlloc {
-    /// A pointer to frame info structs that store the current state of the
-    /// frame.
-    frames: *mut FrameInfo,
-
-    /// The physical address of the first frame whose info is stored in
-    /// `frames`.
-    first_frame_addr: PhysAddr,
-
-    /// The number of frame infos' pointed to by `frames`.
-    count: usize,
-}
-

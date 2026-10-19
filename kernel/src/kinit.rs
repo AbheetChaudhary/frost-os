@@ -1,19 +1,11 @@
 use core::{
-    arch::asm,
-    sync::atomic::{AtomicUsize, AtomicU32, Ordering},
-};
-
-use alloc::{
-    vec::Vec,
+    sync::atomic::{AtomicUsize, Ordering},
 };
 
 use crate::{
-    acpi,
     address,
     boot_mem::{self as bmm, Address},
     cpu,
-    gdt,
-    isr,
     kmalloc::CpuHeap,
     mm,
     page_tables,
@@ -23,14 +15,16 @@ use crate::{
 };
 
 use address::{
-    PhysAddr32,
-    PhysAddr64,
     PhysAddr,
     VirtAddr
 };
 
 use bmm::PhysMemType as bmt; // Boot mem types.
 use mm::PhysMemType as kmt;  // Kernel mem types.
+
+/// Number of regions that could be there in the kernel description of the
+/// physical memory.
+const MAX_K_REGION_COUNT: usize = 256;
 
 type KPhysMem = [Option<mm::PhysMemRegion>; MAX_K_REGION_COUNT];
 
@@ -43,10 +37,6 @@ type KPhysMem = [Option<mm::PhysMemRegion>; MAX_K_REGION_COUNT];
 const STACK_SIZE: usize = 128 * 1024; // 128KB.
 
 const STACK_PAGE_COUNT: usize = STACK_SIZE / (1<<12);
-
-/// Number of regions that could be there in the kernel description of the
-/// physical memory.
-const MAX_K_REGION_COUNT: usize = 256;
 
 /// Virtual address at which the kernel stack will begin.
 ///
@@ -112,9 +102,6 @@ const TRIVIAL_TRANSLATE_TABLE: [(bmt, kmt); 10] = [
 ///
 /// It only works for types that are trivially translateable.
 fn trivial_bmt_to_kmt(mem_type: bmm::PhysMemType) -> Option<mm::PhysMemType> {
-    use bmm::PhysMemType as bmt; // Boot mem types.
-    use mm::PhysMemType as kmt;  // Kernel mem types.
-
     for i in 0..TRIVIAL_TRANSLATE_TABLE.len() {
         if TRIVIAL_TRANSLATE_TABLE[i].0 == mem_type {
             return Some(TRIVIAL_TRANSLATE_TABLE[i].1);
@@ -147,19 +134,19 @@ pub fn translate_phys_mem_boot_to_kernel(mut boot_phys_mem: bmm::PhysMem)
 
     // Usable memory.
     let total_usable_pages: usize = unused_memory_pages;
-    serial!("[BSP] total usable memory pages: {:#x} pages\n", total_usable_pages);
+    serial!("total usable memory pages: {:#x} pages\n", total_usable_pages);
 
     // Total stack memory for all cores.
     let total_stack_pages: usize = core_count as usize * STACK_PAGE_COUNT;
-    serial!("[BSP] total stack pages: {:#x} pages\n", total_stack_pages);
+    serial!("total stack pages: {:#x} pages\n", total_stack_pages);
 
     // Total memory available for heap after taking out stack pages.
     let total_heap_pages = total_usable_pages - total_stack_pages;
-    serial!("[BSP] usable heap pages: {:#x} pages\n", total_heap_pages);
+    serial!("usable heap pages: {:#x} pages\n", total_heap_pages);
 
     // Per core heap memory pages.
     let per_core_heap_pages = total_heap_pages / (core_count as usize + 1);
-    serial!("[BSP] per core heap pages: {per_core_heap_pages:#x} pages\n");
+    serial!("per core heap pages: {per_core_heap_pages:#x} pages\n");
 
     // Size taken by kernel heap and stack.
     let mut stack_heap_size = KERNEL_STACK_SIZE
@@ -215,7 +202,7 @@ pub fn translate_phys_mem_boot_to_kernel(mut boot_phys_mem: bmm::PhysMem)
             }
         }
     }
-    serial!("[BSP] unmapped LoaderCode/Data pages\n");
+    serial!("unmapped LoaderCode/Data pages\n");
 
     // Reclaim memory from boot physical memory description.
     //
@@ -316,8 +303,9 @@ pub fn translate_phys_mem_boot_to_kernel(mut boot_phys_mem: bmm::PhysMem)
         }
     }
 
-    // Create regions for per core stack.
-    'outer: for core_id in 1..core_count {
+    // Create regions for per core stack. Skip the first core, as that is 
+    // already mapped by the bootloader.
+    for core_id in 1..core_count {
         // Collect the stack regions for this core.
 
         // Number of stack pages that we have found for core_id. This is less
@@ -383,7 +371,7 @@ pub fn translate_phys_mem_boot_to_kernel(mut boot_phys_mem: bmm::PhysMem)
     }
 
     // Create regions for per core heap.
-    'outer: for core_id in 0..core_count {
+    for core_id in 0..core_count {
         // Collect the heap regions for this core.
 
         // Number of heap pages that we have found for core_id. This is less
@@ -488,7 +476,7 @@ pub fn translate_phys_mem_boot_to_kernel(mut boot_phys_mem: bmm::PhysMem)
         }
     }
 
-    serial!("[BSP] shared_heap_pages: {:#x}\n", shared_heap_pages_count);
+    serial!("shared_heap_pages: {:#x}\n", shared_heap_pages_count);
 
     k_phys_mem
 }
@@ -639,7 +627,8 @@ fn map_heap_pages(k_phys_mem: &[Option<mm::PhysMemRegion>], lapic_id: mm::LapicI
                 assert!(n + 1 < 5);
 
                 // If wasted pages is less than 5 then that's good enough.
-                wasted_pages += (1 + n);
+                wasted_pages += 1 + n;
+                serial!("[Core#{}] wasted_pages: {wasted_pages}\n", lapic_id.0);
                 break;
             }
         }
@@ -749,7 +738,7 @@ fn map_stack_pages(k_phys_mem: &[Option<mm::PhysMemRegion>],
                 assert!(mapped_stack_pages + mapped_pt_pages + 1 + n == page_count);
 
                 // If wasted pages is less than 5 then that's good enough.
-                wasted_pages += (1 + n);
+                wasted_pages += 1 + n;
                 serial!("[{lapic:?}] wasted_pages: {wasted_pages}\n");
                 assert!(wasted_pages < 4);
 
@@ -767,11 +756,16 @@ pub fn init_all_cores(boot_phys_mem: bmm::PhysMem) -> ! {
     // Translate between boot time physical memory representation to kernel time
     // representation.
     let k_phys_mem = translate_phys_mem_boot_to_kernel(boot_phys_mem);
+    serial!("created kernel physical memory description\n");
 
     let (apic_base, tramp_stack) = mp_setup();
 
     let core_count = 4u32;
     kmain::WAITING_CORES.store(core_count, Ordering::Relaxed);
+
+    if core_count > 1 {
+        serial!("initializing all cores\n");
+    }
 
     // Initialize the stacks of other AP's.
     for i in 1..core_count {
@@ -880,7 +874,7 @@ fn mp_setup(/* madt_ptr: *const acpi::RawMadt */) -> (*const u8, *mut u8) {
     let apic_base_virt = page_tables::translate_p2v(PhysAddr::new(apic_base_phys))
         .expect("Physical Address of local APIC is not mapped.").addr();
 
-    serial!("apic_base: {:#x} -> {:#x}\n", apic_base_phys, apic_base_virt);
+    // serial!("apic_base: {:#x} -> {:#x}\n", apic_base_phys, apic_base_virt);
 
     let apic_base: *const u8 = core::ptr::with_exposed_provenance(apic_base_virt);
 
@@ -891,8 +885,8 @@ fn mp_setup(/* madt_ptr: *const acpi::RawMadt */) -> (*const u8, *mut u8) {
 
     let tramp_page_addr = AP_TRAMPOLINE_PAGE_IDX << 12;
 
-    serial!("__end_of_trampoline: {:#p}\n", &raw const __end_of_trampoline);
-    serial!("ap_init address: {:#x}\n", ap_init as *const () as usize);
+    // serial!("__end_of_trampoline: {:#p}\n", &raw const __end_of_trampoline);
+    // serial!("ap_init address: {:#x}\n", ap_init as *const () as usize);
 
     // Make sure trampoline page is identity mapped.
     assert_eq!(
@@ -925,9 +919,7 @@ fn mp_setup(/* madt_ptr: *const acpi::RawMadt */) -> (*const u8, *mut u8) {
     (apic_base, tramp_stack)
 }
 
-unsafe extern "cdecl" fn ap_init(k_phys_mem: &[Option<mm::PhysMemRegion>; MAX_K_REGION_COUNT], 
-    lapic_id: u32) -> ! {
-
+unsafe extern "cdecl" fn ap_init(k_phys_mem: &KPhysMem, lapic_id: u32) -> ! {
     // Initialize the heap of the AP core.
     let lapic_id = mm::LapicId(lapic_id);
     let (heap_begin, heap_size) = map_heap_pages(k_phys_mem.as_slice(), lapic_id);

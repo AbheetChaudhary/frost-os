@@ -1,6 +1,6 @@
 use core::arch::asm;
 
-use crate::{address, mm, as_cast, cpu};
+use crate::{address, mm, as_cast};
 
 use address::{PhysAddr, VirtAddr};
 use mm::{FrameAllocator};
@@ -8,7 +8,7 @@ use mm::{FrameAllocator};
 /// Virtual address at which serialized pages from the page table data
 /// structures will exist.
 ///
-/// CR3 contains a physical address 
+/// CR3 contains a physical address which is mapped to this virtual address.
 pub const PAGE_TABLE_START: VirtAddr = VirtAddr::new(0xcf000000);
 
 pub unsafe fn get_origin_pd<'a>() -> &'a PageDirectory {
@@ -71,8 +71,6 @@ pub enum PagingError {
 #[repr(transparent)]
 pub struct PageDirEntry(u32);
 
-use PageDirEntry as PDE;
-
 impl PageDirEntry {
     fn is_empty(&self) -> bool {
         self.0 == 0
@@ -132,28 +130,31 @@ impl PageDirectory {
             // read/write, present.
             let pde = (pt_phys_addr_u32 & !((1<<12) - 1)) | (1<<1) | (1<<0);
 
-            // TODO: in case of failures we need to delete this entry.
+            // In case of failures we need to delete this entry.
             self.pd_entries[pde_idx] = PageDirEntry::new(pde);
 
             // Map this new page to appropriate virtual address.
             let pt_virt_addr = PAGE_TABLE_START.strict_add((1 + pde_idx) << 12);
 
             // TODO: How bad could this recursion get...?
-            unsafe {
-                self.insert_mapping(pt_virt_addr, pt_phys_addr, frame_alloc)?;
+            let ret = unsafe {
+                self.insert_mapping(pt_virt_addr, pt_phys_addr, frame_alloc)
+            };
+
+            if let Err(e) = ret {
+                // Failure happened, delete the partially initialized PDE.
+                
+                self.pd_entries[pde_idx] = PageDirEntry::new_empty();
+
+                return Err(e);
             }
         }
 
-        // Address of the page table referenced by PDE at pde_idx.
-        let pt_phys_addr = self.pd_entries[pde_idx].pt_addr()
-            .expect("we have already filled it.");
-
-        // let pt = unsafe { pt_addr.as_mut::<PageTable>() };
+        // Virtual address of the page table referenced by PDE at pde_idx.
         let pt_virt_addr = PAGE_TABLE_START.strict_add((1 + pde_idx) << 12);
 
-        let pt: *mut PageTable = unsafe {
-            core::ptr::with_exposed_provenance_mut(pt_virt_addr.addr())
-        };
+        let pt: *mut PageTable = core::ptr::with_exposed_provenance_mut(
+            pt_virt_addr.addr());
 
         unsafe { (&mut *pt).insert_mapping(virt, phys)? };
 
@@ -177,7 +178,7 @@ impl PageDirectory {
         // Frames consumed from the iterator.
         let mut iter_consumed = 0;
 
-        // If the PDE does not point to a page then return err.
+        // If the PDE does not point to a page then try to create it.
         if self.pd_entries[pde_idx].is_empty() {
             // Allocate a new page for storing a PageTable.
             let pt_phys_addr = frame_iter.next()
@@ -190,7 +191,7 @@ impl PageDirectory {
             // read/write, present.
             let pde = (pt_phys_addr_u32 & !((1<<12) - 1)) | (1<<1) | (1<<0);
 
-            // TODO: in case of failures we need to delete this entry.
+            // In case of failures we need to delete this entry.
             self.pd_entries[pde_idx] = PageDirEntry::new(pde);
 
             // Map this new page to appropriate virtual address.
@@ -205,7 +206,7 @@ impl PageDirectory {
                         iter_consumed += n;
 
                         // Zero initialize the page table.
-                        let pt: &mut PageTable = unsafe {
+                        let pt: &mut PageTable = {
                             let ptr = core::ptr::
                                 with_exposed_provenance_mut(pt_virt_addr.addr());
 
@@ -219,22 +220,21 @@ impl PageDirectory {
                     Err((e, n)) => {
                         iter_consumed += n;
 
+                        // Failure happened, delete the partially initialized
+                        // entry.
+                        self.pd_entries[pde_idx] = PageDirEntry::new_empty();
+
                         return Err((e, iter_consumed));
                     }
                 }
             }
         }
 
-        // Address of the page table referenced by PDE at pde_idx.
-        let pt_phys_addr = self.pd_entries[pde_idx].pt_addr()
-            .expect("we have already filled it.");
-
-        // let pt = unsafe { pt_addr.as_mut::<PageTable>() };
+        // Virtual address of the page table referenced by PDE at pde_idx.
         let pt_virt_addr = PAGE_TABLE_START.strict_add((1 + pde_idx) << 12);
 
-        let pt: *mut PageTable = unsafe {
-            core::ptr::with_exposed_provenance_mut(pt_virt_addr.addr())
-        };
+        let pt: *mut PageTable =
+            core::ptr::with_exposed_provenance_mut(pt_virt_addr.addr());
 
         unsafe { (&mut *pt).insert_mapping(virt, phys)
             .map_err(|e| (e, iter_consumed))? };
@@ -260,7 +260,7 @@ impl PageDirectory {
             return Err(PagingError::UnalignedAddr);
         }
 
-        let (pde_idx, pte_idx, offset) = decompose(virt);
+        let (pde_idx, pte_idx, _offset) = decompose(virt);
 
         if self.pd_entries[pde_idx].pt_addr().is_none() {
             return Err(PagingError::MissingPde);
@@ -342,8 +342,6 @@ impl PageDirectory {
 #[derive(Copy, Clone)]
 #[repr(transparent)]
 pub struct PageTableEntry(u32);
-
-use PageTableEntry as PTE;
 
 impl PageTableEntry {
     fn is_empty(&self) -> bool {

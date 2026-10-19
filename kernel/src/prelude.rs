@@ -1,5 +1,10 @@
+#[allow(unused)]
 pub use crate::cpu::*;
+
+#[allow(unused)]
 pub use crate::serial;
+
+#[allow(unused)]
 pub use crate::address::*;
 
 #[macro_export]

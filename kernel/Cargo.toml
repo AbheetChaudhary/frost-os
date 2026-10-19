@@ -3,8 +3,6 @@ name = "frost"
 version = "0.1.0"
 edition = "2024"
 
-[dependencies]
-
 [profile.dev]
 panic = "abort"
 
@@ -15,6 +13,3 @@ panic = "abort"
 lto = true
 # strip = true
 codegen-units = 1
-
-# [lib]
-# crate-type = ["staticlib"]

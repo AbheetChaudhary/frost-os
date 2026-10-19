@@ -1,3 +1,15 @@
+//! This module provides a view into how the bootloader understands memory.
+//!
+//! It is useful when the kernel is taking over the memory and needs a way to 
+//! interpret the bootloader's structures.
+//!
+//! This is very similar to the kernels own `src/mm.rs` file. A more generic
+//! approach would have been to make both the kernel and the bootloader use a
+//! common library. But it might be beneficial to seperate how they both deal
+//! with memory. The bootloader is intentionally simple whereas the kernel wants
+//! to have more information about the memory. The fields in `PhysMemType` enum
+//! in both the files show that.
+
 #[repr(u8)]
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub enum PhysMemType {

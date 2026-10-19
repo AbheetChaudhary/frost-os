@@ -33,25 +33,15 @@ There are helper `just` commands to do various tasks.
 - `just kernel` to build the kernel only.
 - `just uefi` to build the bootloader only.
 
-## Resources
-These resources were invaluable to get up and running in the first few weeks:
-
-- [Brandon F.'s OSDev blog](http://www.osdever.net/bkerndev/Docs/intro.htm)
-- [Write your own Operating System - YouTube Playlist](https://www.youtube.com/watch?v=1rnA6wpF0o4&list=PLHh55M_Kq4OApWScZyPl5HhgsTJS9MZ6M)
-- [AptRock327 - OSDev Lecture Series](https://www.youtube.com/watch?v=6n0aYtmgM5Y&list=PL5p37LtXzjqOoEl369i0nlTSaU1O3L-BN)
-
-Over time the Intel Software Developer Manuals, UEFI/ACPI specifications and
-OSDev forums became the main resources.
-
 ## LLM Usage
 
-### For Code Generation
+**For Code Generation:**
 
-None.
+_None._
 
-### For Debugging
+**For Debugging**
 
-Some usage.
+_Some usage._
 
 ...like using to find inconsistencies between what my code comments said what
 is happening vs what the code was actually doing. That helped in quickly

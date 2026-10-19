@@ -1,8 +1,10 @@
+#![allow(unused)]
+
 use core::mem::offset_of;
 
-use crate::{address, serial, page_tables, cpu, utils, isr, gdt, as_cast};
+use crate::{address, as_cast};
 
-use address::{PhysAddr32, PhysAddr64, PhysAddr};
+use address::{PhysAddr32, PhysAddr64};
 
 #[repr(transparent)]
 pub struct FlexibleArray<T>(core::marker::PhantomData<T>);
@@ -183,36 +185,6 @@ impl Xsdt {
         };
 
         Ok(xsdt)
-    }
-
-    pub fn find_sdth_addr(&self, sig: [u8; 4]) -> Option<u64> {
-        todo!();
-        /*
-        let skip_bytes = size_of::<RawXsdt>();
-
-        let sdth_count = (self.length() - skip_bytes) / 8;
-
-        let sdth_ptr_begin = self.get_entry_ptr();
-
-        for i in 0..sdth_count {
-            let ptr = unsafe { sdth_ptr_begin.add(i) };
-
-            let sdth_addr = unsafe { ptr.read_unaligned() };
-
-            let sdth_ptr: *const TableHeader =
-                core::ptr::with_exposed_provenance(sdth_addr.try_into().unwrap());
-
-            let signature = unsafe {
-                (&raw const (*sdth_ptr).signature).read()
-            };
-
-            if signature == sig {
-                return Some(sdth_addr);
-            }
-        }
-
-        None
-        */
     }
 }
 

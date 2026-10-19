@@ -34,15 +34,12 @@ pub unsafe fn kmain(heap: &CpuHeap, lapic_id: mm::LapicId) -> ! {
 
     let mut v: Vec<i32, &CpuHeap> = Vec::with_capacity_in(4 * 1024 * 1024, heap);
 
-    for i in 0..32 {
+    for _ in 0..32 {
         v.push(lapic_id.0 as i32);
         core::hint::black_box(&mut v);
     }
 
-    while let Some(i) = v.pop() {
-        serial!("{i} ");
-    }
-    serial!("\n");
+    while let Some(_) = v.pop() {}
     drop(v);
 
     cpu::forever_spin();

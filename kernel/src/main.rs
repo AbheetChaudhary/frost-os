@@ -1,18 +1,16 @@
-#![allow(unused)]
+#![feature(fn_align, allocator_ext)]
 
 // This tries to do iret/iretd by itself and can be hard to integrate with
 // existing assembly code.
 //
 // #![feature(abi_x86_interrupt)]
 
-#![feature(fn_align, thread_local, allocator_ext)]
-
 #![no_std]
 #![no_main]
 
 extern crate alloc;
 
-pub mod vga_buffer;
+pub mod spin;
 pub mod utils;
 pub mod isr;
 pub mod irq;
@@ -31,9 +29,6 @@ pub mod kmalloc;
 pub mod kmain;
 
 mod prelude;
-
-use vga_buffer::WRITER;
-use prelude::*;
 
 struct FakeAllocator;
 
@@ -77,6 +72,7 @@ fn panic_handler(info: &core::panic::PanicInfo) -> ! {
     cpu::halt();
 }
 
+
 #[allow(unused)]
 fn blessed_machine() {
     serial!("machine spirit is appeased...\n");
@@ -116,7 +112,7 @@ pub fn debug_dump(phys_mem: &boot_mem::PhysMem) {
     serial!("---------------------------------------------------\n");
 }
 
-pub fn bootstrap(phys_mem: boot_mem::PhysMem, acpi: AcpiHandover) -> ! {
+pub fn bootstrap(phys_mem: boot_mem::PhysMem, _acpi: AcpiHandover) -> ! {
     // Disable interrupts and install GDTR.
     unsafe { cpu::disable_interrupts(); }
 
@@ -127,14 +123,13 @@ pub fn bootstrap(phys_mem: boot_mem::PhysMem, acpi: AcpiHandover) -> ! {
 
     gdt.gdt_install();
 
-    // WRITER.lock().clear_screen();
     unsafe { 
         serial::SerialPort::init();
     }
 
     serial!("\n\n");
     serial!("################################################################\n");
-    serial!("################            FROST            ###################\n");
+    serial!("################            FROSt            ###################\n");
     serial!("################################################################\n");
     serial!("\n");
 
@@ -143,54 +138,16 @@ pub fn bootstrap(phys_mem: boot_mem::PhysMem, acpi: AcpiHandover) -> ! {
         irq::irq_install();
     }
 
-    serial!("...installed ISR and IRQ's\n");
+    serial!("installed ISR and IRQ's\n");
 
     timer::install();
-    serial!("...installed timer\n");
+    serial!("installed timer\n");
 
     unsafe { cpu::enable_interrupts(); }
-
-    serial!("...enabled interrupts\n");
-
-    // keyboard::install();
-    // serial!("...initialized keyboard\n");
-
-    if cpu::has_cpuid() {
-        serial!("...has CPUID=true\n");
-        let extended_cpuid = unsafe { cpu::has_extended_cpuid() };
-        serial!("...has extended CPUID={}\n", extended_cpuid);
-
-        serial!("...has long mode={}\n", unsafe { cpu::has_long_mode() });
-    } else {
-        serial!("...has CPUID=false\n");
-    }
+    serial!("enabled interrupts\n");
 
     serial!("kernel_entry: {:p}\n", kernel_entry as *const u8);
-
-    serial!("hello, world from Serial\n");
-
-    // debug_dump(&phys_mem);
-
-    serial!("ticks: {}\n", timer::get_current_ticks());
-
-    serial!("{:#?}\n", acpi);
-
-    let apic_ptr = unsafe {
-        core::ptr::with_exposed_provenance::<u8>(acpi.apic)
-    };
-
-    for i in 0..4 {
-        let b = unsafe { apic_ptr.add(i).read() };
-        serial!("{}", b as char);
-    }
-    serial!("\n");
-
-    // serial!("trampoline address: {:#x}\n", kinit::sipi_trampoline as usize);
-
-    // let madt_ptr = core::ptr::with_exposed_provenance(acpi.apic);
-    // kinit::mp_init(/* madt_ptr */);
+    serial!("machine spirit appeased...\n");
 
     kinit::init_all_cores(phys_mem);
-
-    loop {}
 }

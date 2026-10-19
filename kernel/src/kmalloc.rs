@@ -1,3 +1,5 @@
+#![allow(unused)]
+
 use core::{
     alloc::{
         Allocator,
@@ -8,10 +10,6 @@ use core::{
     cell::UnsafeCell,
     mem::MaybeUninit,
     ptr::NonNull,
-    sync::atomic::{
-        AtomicPtr,
-        Ordering
-    },
 };
 
 /// Size of the block header.
@@ -248,7 +246,7 @@ impl Kmalloc {
     }
 
     pub unsafe fn deallocate(&mut self, ptr: NonNull<u8>, layout: Layout) {
-        let header_ptr = unsafe { ptr.as_ptr().cast::<Header>().wrapping_sub(1) };
+        let header_ptr = ptr.as_ptr().cast::<Header>().wrapping_sub(1);
 
         let header = unsafe { &mut *header_ptr };
 

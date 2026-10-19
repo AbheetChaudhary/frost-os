@@ -1,7 +1,7 @@
 use core::fmt;
 
 use crate::irq::{outportb, inportb};
-use crate::vga_buffer::SpinLock;
+use crate::spin::SpinLock;
 // use crate::mm::HIGHER_BEGIN;
 
 /// Assuming bios environment, this is where the bios puts upto 4 serial port

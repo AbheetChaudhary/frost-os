@@ -5,29 +5,6 @@ use core::mem::MaybeUninit;
 use core::arch::asm;
 use core::ffi::c_void;
 
-/*
-
-Runtime service:
-- ResetSystem()
-
-
-*/
-
-/*
-use loader::{
-    uefi,
-    acpi,
-    utf16,
-    protocols,
-    println, serial, serialn,
-    bs_call_strict, st_call_strict, rt_call_strict, rt_call, bs_call,
-        proto_call_strict, proto_call,
-    serial::{serial_write_raw, serialn_write_raw},
-    elf,
-    kinit,
-};
-*/
-
 use loader::*;
 use serial::{serialn_write_raw};
 
