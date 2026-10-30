@@ -67,6 +67,12 @@ So before adding anything new, the following needs to happen:
 
 For more details, read the commit messages or may be the code itself;)
 
+## Demo
+
+https://github.com/user-attachments/assets/ce3d23fa-897c-4dde-9935-58591ee35ad2
+
+Initializing 4 cores as per the boot process described above.
+
 # Building/Running
 
 ## No Linker Scripts
